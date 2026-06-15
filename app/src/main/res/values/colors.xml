@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="board_bg">#DEB887</color>
+    <color name="board_line">#333333</color>
+    <color name="black_piece">#000000</color>
+    <color name="white_piece">#FFFFFF</color>
+    <color name="accent">#FF6B00</color>
+    <color name="primary">#8B4513</color>
+    <color name="white">#FFFFFF</color>
+    <color name="black">#000000</color>
+    <color name="ic_launcher_background">#DEB887</color>
+</resources>

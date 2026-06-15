@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">围棋双屏</string>
+    <string name="player_black">黑方</string>
+    <string name="player_white">白方</string>
+    <string name="restart">重新开始</string>
+    <string name="undo">悔棋</string>
+    <string name="wait_turn">请等待对方落子</string>
+    <string name="your_turn">轮到你了，请落子</string>
+    <string name="game_over">游戏结束</string>
+    <string name="no_secondary_display">未检测到副屏</string>
+</resources>

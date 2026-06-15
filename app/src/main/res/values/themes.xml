@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.GoDualScreen" parent="Theme.AppCompat.Light.NoActionBar">
+        <item name="colorPrimary">#8B4513</item>
+        <item name="colorPrimaryDark">#6B3410</item>
+        <item name="colorAccent">#FF6B00</item>
+        <item name="android:windowFullscreen">true</item>
+        <item name="android:windowBackground">#DEB887</item>
+    </style>
+</resources>

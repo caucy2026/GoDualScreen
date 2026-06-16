@@ -101,6 +101,11 @@ class GamePresentation : Activity() {
             if (!game.isActive || game.isGameOver) { showPopupMessage("\u6E38\u620F\u672A\u5F00\u59CB"); return@setOnClickListener }
             if (game.isPaused) { showPopupMessage("\u6E38\u620F\u6682\u505C\u4E2D"); return@setOnClickListener }
             if (game.currentPlayer != playerPerspective) { showPopupMessage("\u73B0\u5728\u662F\u5BF9\u65B9\u7684\u56DE\u5408\uFF0C\u4E0D\u80FD\u4F7F\u7528\u63D0\u793A"); return@setOnClickListener }
+            // V6.1: KataGo 关闭检查
+            if (getMainActivity?.invoke()?.kataGoEnabled != true) {
+                showPopupMessage("\u26A0\uFE0F \u8BF7\u5148\u5728\u8BBE\u7F6E\u4E2D\u5F00\u542F KataGo")
+                return@setOnClickListener
+            }
             // 委托 MainActivity 后台计算
             val ma = getMainActivity?.invoke() ?: return@setOnClickListener
             ma.computeHintFor?.invoke(playerPerspective) { hint ->
@@ -155,6 +160,11 @@ class GamePresentation : Activity() {
         val autoSwGP = Switch(this).apply {
             isChecked = false
             setOnCheckedChangeListener { _, on ->
+                if (on && getMainActivity?.invoke()?.kataGoEnabled != true) {
+                    showPopupMessage("⚠️ 请先在设置中开启 KataGo")
+                    isChecked = false
+                    return@setOnCheckedChangeListener
+                }
                 goView?.autoPlayBlock = on
                 getMainActivity?.invoke()?.setAutoPlayWhite(on)
                 // 如果正在白方回合，立即触发自动落子
@@ -165,7 +175,7 @@ class GamePresentation : Activity() {
         leftPanel.addView(autoRow, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = 4 })
 
         val verLabel = TextView(this).apply {
-            text = "双屏围棋\nV3.4"; textSize = 9f
+            text = "KataGo围棋双屏\nV6.1"; textSize = 9f
             setTextColor(Color.parseColor("#998B7388")); gravity = Gravity.CENTER
             setPadding(2, 8, 2, 2)
         }

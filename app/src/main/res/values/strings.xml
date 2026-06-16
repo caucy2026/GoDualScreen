@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">围棋双屏</string>
+    <string name="app_name">KataGo围棋双屏</string>
     <string name="player_black">黑方</string>
     <string name="player_white">白方</string>
     <string name="restart">重新开始</string>

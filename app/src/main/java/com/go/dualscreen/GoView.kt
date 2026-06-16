@@ -303,9 +303,9 @@ class GoView @JvmOverloads constructor(
             }.let { canvas.drawCircle(p.x, p.y, p.size * (p.life / p.maxLife), it) }
         }
 
-        // 消息（屏幕底部，靠近边缘）
+        // 消息（屏幕顶部，不遮挡棋盘）
         if (message.isNotEmpty()) {
-            canvas.drawText(message, w / 2f, h - 18f, msgPaint)
+            canvas.drawText(message, w / 2f, 28f, msgPaint)
         }
     }
 

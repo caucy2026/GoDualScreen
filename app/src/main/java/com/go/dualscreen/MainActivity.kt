@@ -13,6 +13,7 @@ import android.hardware.display.DisplayManager
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import android.view.Display
 import android.view.Gravity
 import android.view.View
@@ -41,7 +42,11 @@ class MainActivity : AppCompatActivity() {
     private lateinit var prefs: SharedPreferences
     @JvmField var autoPlayEnabled = false
     @JvmField var autoPlayWhite = false
+    @JvmField var kataGoEnabled = true  // V6.1: KataGo开关
     private var autoPlayRunnable: Runnable? = null
+    // ★ V4.4: KataGo 启动计时器
+    private var kataGoStartMs = 0L
+    private var kataGoTimerRunnable: Runnable? = null
 
     fun setAutoPlayWhite(on: Boolean) { autoPlayWhite = on }
     fun triggerAutoPlayIfMyTurn() {
@@ -71,7 +76,7 @@ class MainActivity : AppCompatActivity() {
         // --- 以下仅在主屏 (Display 0) 执行 ---
         myPlayer = GoGame.PLAYER_BLACK
         prefs = getSharedPreferences("go_settings", MODE_PRIVATE)
-        val savedSize = prefs.getInt("board_size", 19)
+        val savedSize = prefs.getInt("board_size", 13)
         GameState.game = GoGame(savedSize)
         game = GameState.game
         GameState.mainActivity = this
@@ -80,9 +85,19 @@ class MainActivity : AppCompatActivity() {
         displayManager = getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
         SoundFX.stoneSoundEnabled = prefs.getBoolean("stone_sound", true)
         SoundFX.voiceStyle = prefs.getInt("voice_style", 0)
+        // V6.0: 恢复背景音乐状态（默认开启50%）
+        BgMusic.updateVolume(prefs.getFloat("music_volume", 0.5f))
+        if (prefs.getBoolean("bg_music", true)) {
+            BgMusic.setEnabled(this, true)
+        }
+        // V6.1: KataGo开关状态（默认开启）
+        kataGoEnabled = prefs.getBoolean("katago_enabled", true)
         initMainUI()
         goView.showPieceOrder = prefs.getBoolean("piece_order", false)
         launchWhiteScreen()
+
+        // ★ V6.1: 初始化 KataGo 引擎（后台加载模型，不阻塞 UI）
+        if (kataGoEnabled) startKataGoEngine()
     }
 
     override fun onConfigurationChanged(newConfig: Configuration) {
@@ -93,6 +108,54 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun isLandscape() = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+
+    /** V6.1: 启动 KataGo 引擎（可从设置开关触发） */
+    private fun startKataGoEngine() {
+        if (GameState.kataGoEngine?.isReady == true) return  // 已就绪
+        kataGoStartMs = System.currentTimeMillis()
+        goView.message = "\uD83E\uDD16 KataGo \u521D\u59CB\u5316\u4E2D... 0s"
+        goView.invalidate()
+        kataGoTimerRunnable = object : Runnable {
+            override fun run() {
+                if (GameState.kataGoEngine?.isReady == true) return
+                val elapsed = (System.currentTimeMillis() - kataGoStartMs) / 1000
+                goView.message = "\uD83E\uDD16 KataGo \u521D\u59CB\u5316\u4E2D... ${elapsed}s"
+                goView.invalidate()
+                handler.postDelayed(this, 1000)
+            }
+        }
+        handler.postDelayed(kataGoTimerRunnable!!, 1000)
+
+        GameState.kataGoEngine = KataGoEngine(this).also { engine ->
+            engine.init(
+                onProgress = { msg ->
+                    runOnUiThread {
+                        val elapsed = (System.currentTimeMillis() - kataGoStartMs) / 1000
+                        goView.message = "\uD83E\uDD16 $msg (${elapsed}s)"
+                        goView.invalidate()
+                    }
+                },
+                onReady = { ok, info ->
+                    runOnUiThread {
+                        GameState.useKataGo = ok
+                        kataGoTimerRunnable?.let { handler.removeCallbacks(it) }
+                        kataGoTimerRunnable = null
+                        val totalSec = (System.currentTimeMillis() - kataGoStartMs) / 1000
+                        if (ok) {
+                            goView.message = "\u2705 KataGo \u5C31\u7EEA (OpenCL GPU, ${totalSec}s)"
+                            goView.invalidate()
+                            handler.postDelayed({ goView.clearMessage(); goView.invalidate(); updateStatusDisplay() }, 2500)
+                            if (game.isActive) asyncSyncKataGoBoard()
+                        } else {
+                            goView.message = "\u274C KataGo \u5931\u8D25: $info"
+                            goView.invalidate()
+                            updateStatusDisplay()
+                        }
+                    }
+                }
+            )
+        }
+    }
 
     private fun initMainUI() {
         val root = LinearLayout(this).apply {
@@ -214,6 +277,11 @@ class MainActivity : AppCompatActivity() {
         val autoSw = Switch(this).apply {
             isChecked = false; textSize = 8f
             setOnCheckedChangeListener { _, on ->
+                if (on && !kataGoEnabled) {
+                    showPopupMessage("⚠️ 请先在设置中开启 KataGo")
+                    isChecked = false
+                    return@setOnCheckedChangeListener
+                }
                 autoPlayEnabled = on
                 goView.autoPlayBlock = on
                 // 如果正在我方回合，立即触发自动落子
@@ -227,7 +295,7 @@ class MainActivity : AppCompatActivity() {
 
         // 版本信息（左下角）
         val verLabel = TextView(this).apply {
-            text = "双屏围棋\nV3.4"; textSize = 9f
+            text = "KataGo围棋双屏\nV6.1"; textSize = 9f
             setTextColor(Color.parseColor("#998B7388")); gravity = Gravity.CENTER
             setPadding(2, 8, 2, 2)
         }
@@ -289,8 +357,13 @@ class MainActivity : AppCompatActivity() {
         panel.addView(exitBtn, LinearLayout.LayoutParams(btnSize, btnSize).apply { bottomMargin = 12; rightMargin = btnMargin2 })
 
         val settingsBtn = TextView(this).apply {
-            text = "\u2261"; textSize = 22f; setTextColor(Color.parseColor("#998B7355"))
-            gravity = Gravity.CENTER; setPadding(12, 0, 12, 4)
+            text = "\u2699"; textSize = 26f; setTextColor(Color.parseColor("#FFFFFF"))
+            gravity = Gravity.CENTER; setPadding(10, 4, 10, 4)
+            // V5.6: 加圆角背景让按钮更明显
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE; cornerRadius = 12f
+                setColor(Color.parseColor("#CC8D6E63")); setStroke(2, Color.parseColor("#FFD700"))
+            }
             setOnClickListener {
                 if (game.isPaused && game.pausedByPlayer != myPlayer) { showMsgToPlayer(myPlayer, "\u6E38\u620F\u6682\u505C\u4E2D\uFF0C\u8BF7\u7B49\u5F85\u5BF9\u65B9\u6062\u590D"); return@setOnClickListener }
                 showSettingsDialog()
@@ -387,16 +460,80 @@ class MainActivity : AppCompatActivity() {
 
     private fun onStartOrRestart(player: Int) {
         if (game.isPaused) { showMsgToPlayer(player, "\u6E38\u620F\u6682\u505C\u4E2D\uFF0C\u8BF7\u5148\u6062\u590D\u6E38\u620F"); return }
+        // ★ V6.1: KataGo 初始化中禁止开始
+        if (kataGoEnabled && GameState.kataGoEngine?.isReady != true) {
+            showMsgToPlayer(player, "\u23F3 KataGo \u521D\u59CB\u5316\u4E2D\uFF0C\u8BF7\u7A0D\u5019...")
+            return
+        }
+        // ★ V5.5: 模型加载中禁止开始
+        val kg = GameState.kataGoEngine
+        if (kg != null && kg.boardLoading) {
+            showMsgToPlayer(player, "\u23F3 \u6A21\u578B\u52A0\u8F7D\u4E2D\uFF0C\u8BF7\u7A0D\u5019...")
+            return
+        }
         // 围棋规则：黑方永远先手，无论谁按开始
         if (!game.isActive) { game.startGame(); onGameStarted() }
         else if (!game.isGameOver) requestRestart(player)
         else doRestart()
     }
+    /** V4.5: 异步通知 KataGo 落子（不阻塞 UI） */
+    private fun notifyKataGoMove(row: Int, col: Int, player: Int) {
+        val kg = GameState.kataGoEngine ?: return
+        if (!kg.isReady) return
+        val color = if (player == GoGame.PLAYER_BLACK) "b" else "w"
+        Thread {
+            try { kg.playMove(color, row, col) }
+            catch (e: Exception) { Log.e("KataGo", "Notify move failed: ${e.message}") }
+        }.start()
+    }
+
+    /** 重置 KataGo 棋盘 */
+    /** V5.1: 同步重置 KataGo 棋盘基础设置（快速，3条命令~150ms） */
+    private fun resetKataGoBoard() {
+        val kg = GameState.kataGoEngine ?: return
+        if (!kg.isReady) return
+        // 同步执行基础设置，确保任何后续操作前棋盘已就绪
+        try {
+            kg.setBoardSize(game.boardSize)
+            kg.clearBoard()
+            kg.setKomi(GoGame.KOMI.toFloat())
+        } catch (e: Exception) {
+            Log.e("KataGo", "Board reset failed: ${e.message}")
+        }
+    }
+
+    /** V4.4: 异步回放所有历史落子，不阻塞 UI */
+    private fun asyncSyncKataGoBoard() {
+        val kg = GameState.kataGoEngine ?: return
+        if (!kg.isReady) return
+        Thread {
+            try {
+                kg.setBoardSize(game.boardSize)
+                kg.clearBoard()
+                kg.setKomi(GoGame.KOMI.toFloat())
+                var count = 0
+                for (row in 0 until game.boardSize) {
+                    for (col in 0 until game.boardSize) {
+                        val piece = game.board[row][col]
+                        if (piece != GoGame.EMPTY) {
+                            val color = if (piece == GoGame.PLAYER_BLACK) "b" else "w"
+                            kg.playMove(color, row, col)
+                            count++
+                        }
+                    }
+                }
+                Log.i("KataGo", "Board synced async: $count moves")
+            } catch (e: Exception) {
+                Log.e("KataGo", "Board sync failed: ${e.message}")
+            }
+        }.start()
+    }
+
     private fun onGameStarted() {
         goView.clearPreview(); goView.invalidate(); gamePresentation?.refreshView()
         updateButtonState(); updateStatusDisplay(); updateCapturesDisplay()
         gamePresentation?.updateButtonState(); startRemindTimers()
-        // 黑方先手，播放黑方语音
+        resetKataGoBoard()
         SoundFX.playVoice(this, R.raw.your_turn_black)
     }
     private fun requestRestart(player: Int) {
@@ -429,7 +566,7 @@ class MainActivity : AppCompatActivity() {
         gamePresentation?.clearPreview(); gamePresentation?.clearMessage(); gamePresentation?.refreshView()
         updateButtonState(); updateStatusDisplay(); updateCapturesDisplay()
         gamePresentation?.updateButtonState(); startRemindTimers()
-        // 黑方先手，播放黑方语音
+        resetKataGoBoard()  // ★ 重置 KataGo 棋盘
         SoundFX.playVoice(this, R.raw.your_turn_black)
     }
     fun showRestartRequestDialog(requesterName: String, callback: (Boolean) -> Unit) {
@@ -467,6 +604,9 @@ class MainActivity : AppCompatActivity() {
         try { gamePresentation?.clearAllAnimations() } catch (_: Exception) {}
         try { gamePresentation?.finish() } catch (_: Exception) {}
         gamePresentation = null; GamePresentation.instance = null
+        BgMusic.stop()
+        GameState.kataGoEngine?.shutdown()
+        GameState.kataGoEngine = null
         handler.postDelayed({ finishAffinity() }, 150)
     }
     private fun requestUndo(player: Int) {
@@ -491,6 +631,8 @@ class MainActivity : AppCompatActivity() {
             goView.clearPreview(); goView.clearMessage(); goView.invalidate()
             gamePresentation?.clearMessage(); gamePresentation?.refreshView()
             updateStatusDisplay(); updateCapturesDisplay()
+            // ★ V5.2: 悔棋后重新同步 Katago 棋盘（GoGame 已回滚，KataGo 必须跟进）
+            asyncSyncKataGoBoard()
             startRemindTimers()
         }
     }
@@ -543,13 +685,18 @@ class MainActivity : AppCompatActivity() {
         } else startRemindTimers()
     }
 
-    private fun handlePiecePlaced(row: Int, col: Int) {
+    private fun handlePiecePlaced(row: Int, col: Int, isAutoPlay: Boolean = false) {
         val r = game.placePiece(row, col, game.currentPlayer)
         if (!r.success) { showMsg(r.message); return }
+        // ★ V5.2: genMove 已自动落子，自动落子不重复通知 KataGo
+        if (!isAutoPlay) {
+            notifyKataGoMove(row, col, if (game.currentPlayer == GoGame.PLAYER_BLACK) GoGame.PLAYER_WHITE else GoGame.PLAYER_BLACK)
+        }
         SoundFX.playStoneSound()
         if (r.captures > 0) SoundFX.playCaptureSound()
-        goView.clearPreview(); goView.clearHint(); goView.clearTerritory(); goView.clearMessage(); goView.invalidate()
-        gamePresentation?.clearMessage(); gamePresentation?.clearHint(); gamePresentation?.refreshView()
+        // V5.0: 清除提示圈和领土标记，但保留分析文字（下步落子时才清除）
+        goView.clearPreview(); goView.clearHint(); goView.clearTerritory(); goView.invalidate()
+        gamePresentation?.clearHint(); gamePresentation?.refreshView()
         updateStatusDisplay(); updateCapturesDisplay()
         if (r.gameOver) {
             stopRemindTimers(); updateButtonState(); gamePresentation?.updateButtonState()
@@ -594,17 +741,47 @@ class MainActivity : AppCompatActivity() {
         computeAiAsync(player, cb)
     }
 
-    /** 后台 AI 计算（防 ANR） */
+    /** 后台 AI 计算（防 ANR + 超时保护 + V4.8 统一未就绪提示） */
     private var aiThinking = false
+    private var aiTimeoutRunnable: Runnable? = null
     private fun computeAiAsync(player: Int, onDone: (Triple<Int,Int,String>?) -> Unit) {
         if (aiThinking) return
+        // ★ V6.1: KataGo 已关闭
+        if (!kataGoEnabled) {
+            val msg = "⚠️ KataGo已关闭，请在设置中开启"
+            goView.message = msg; goView.invalidate()
+            gamePresentation?.showMessage(msg)
+            onDone(null)
+            return
+        }
+        // ★ V4.8: KataGo 未就绪 → 双方屏幕都提示
+        if (GameState.kataGoEngine?.isReady != true) {
+            val msg = "\u23F3 KataGo \u5F15\u64CE\u542F\u52A8\u4E2D\uFF0C\u8BF7\u7A0D\u5019..."
+            goView.message = msg; goView.invalidate()
+            gamePresentation?.showMessage(msg)
+            onDone(null)
+            return
+        }
         aiThinking = true
-        val msg = "\uD83E\uDD16 \u6B63\u5728\u6DF1\u5EA6\u601D\u8003\u5168\u5C40\u6700\u4F18\u89E3..."
+        val msg = "\uD83E\uDD16 KataGo \u6DF1\u5EA6\u601D\u8003\u4E2D..."
         if (player == myPlayer) { goView.message = msg; goView.invalidate() }
         else gamePresentation?.showMessage(msg)
+        // ★ V4.4: 10 秒超时保护，防止死锁
+        aiTimeoutRunnable = Runnable {
+            aiThinking = false
+            Log.w("KataGo", "AI thinking timeout! Resetting aiThinking flag")
+            handler.post {
+                if (player == myPlayer) { goView.message = "⚠️ AI 超时，请重试"; goView.invalidate() }
+                else gamePresentation?.showMessage("⚠️ AI 超时")
+                onDone(null)
+            }
+        }
+        handler.postDelayed(aiTimeoutRunnable!!, 10000)
         Thread {
             val result = try { game.suggestMove(player) } catch (_: Exception) { null }
             handler.post {
+                aiTimeoutRunnable?.let { handler.removeCallbacks(it) }
+                aiTimeoutRunnable = null
                 aiThinking = false
                 onDone(result)
             }
@@ -613,10 +790,22 @@ class MainActivity : AppCompatActivity() {
 
     /** 仅在自己屏幕显示提示（不传给副屏），圆圈显示落子后的包围圈 */
     private fun handleHint() {
-        if (aiThinking) { showMsgToPlayer(myPlayer, "\u6B63\u5728\u601D\u8003\u4E2D\uFF0C\u8BF7\u7A0D\u5019..."); return }
+        if (aiThinking) { showMsgToPlayer(myPlayer, "🤖 正在思考中，请稍候..."); return }
+        // ★ V6.1: KataGo 已关闭
+        if (!kataGoEnabled) {
+            showMsgToPlayer(myPlayer, "⚠️ 请先在设置中开启 KataGo")
+            return
+        }
+        // ★ V4.8: KataGo 未就绪
+        if (GameState.kataGoEngine?.isReady != true) {
+            val msg = "\u23F3 KataGo \u5F15\u64CE\u542F\u52A8\u4E2D\uFF0C\u8BF7\u7A0D\u5019..."
+            goView.message = msg; goView.invalidate()
+            gamePresentation?.showMessage(msg)
+            return
+        }
         computeAiAsync(myPlayer) { hint ->
             goView.clearMessage()
-            if (hint == null) { showMsgToPlayer(myPlayer, "\u6682\u65E0\u63A8\u8350\u4F4D\u7F6E"); return@computeAiAsync }
+            if (hint == null) { showMsgToPlayer(myPlayer, "🤖 暂无可推荐位置"); return@computeAiAsync }
             val (row, col, reason) = hint
             goView.showHint(row, col)
             goView.message = reason
@@ -634,7 +823,7 @@ class MainActivity : AppCompatActivity() {
             else gamePresentation?.clearMessage()
             if (hint != null) {
                 val (row, col, reason) = hint
-                handlePiecePlaced(row, col)
+                handlePiecePlaced(row, col, isAutoPlay = true)
                 if (player == myPlayer) {
                     goView.message = reason
                     goView.invalidate()
@@ -876,10 +1065,31 @@ class MainActivity : AppCompatActivity() {
                 }
                 setOnClickListener {
                     if (game.isActive) { showPopupMessage("\u8BF7\u5148\u7ED3\u675F\u5F53\u524D\u5BF9\u5C40\u540E\u5207\u6362\u96BE\u5EA6"); return@setOnClickListener }
-                    game.setBoardSize(diffSizes[i])
-                    prefs.edit().putInt("board_size", diffSizes[i]).apply()
+                    // V6.1: KataGo 初始化中禁止切换，避免状态异常
+                    if (kataGoEnabled && GameState.kataGoEngine?.isReady != true) {
+                        showPopupMessage("\u23F3 KataGo \u521D\u59CB\u5316\u4E2D\uFF0C\u8BF7\u7A0D\u5019...")
+                        return@setOnClickListener
+                    }
+                    val kg = GameState.kataGoEngine
+                    // V6.1: 模型加载中禁止切换
+                    if (kg != null && kg.boardLoading) {
+                        showPopupMessage("\u23F3 \u6A21\u578B\u52A0\u8F7D\u4E2D\uFF0C\u8BF7\u7A0D\u5019...")
+                        return@setOnClickListener
+                    }
+                    val newSize = diffSizes[i]
+                    game.setBoardSize(newSize)
+                    prefs.edit().putInt("board_size", newSize).apply()
                     goView.invalidate(); gamePresentation?.refreshView()
                     updateStatusDisplay(); updateCapturesDisplay()
+                    // ★ V5.5: 异步预加载 KataGo 模型
+                    if (kg != null && kg.isReady && kg.currentBoardSize != newSize) {
+                        goView.message = "\u23F3 \u6B63\u5728\u5207\u6362\u68CB\u76D8\u6A21\u578B..."
+                        goView.invalidate()
+                        kg.loadBoardSize(newSize,
+                            onProgress = { msg -> runOnUiThread { goView.message = msg; goView.invalidate() } },
+                            onDone = { runOnUiThread { goView.message = "\u2705 ${newSize}\u8DEF\u68CB\u76D8\u5C31\u7EEA"; goView.invalidate() } }
+                        )
+                    }
                     // 刷新设置面板
                     (overlay.parent as? ViewGroup)?.removeView(overlay)
                     showSettingsDialog()
@@ -890,6 +1100,74 @@ class MainActivity : AppCompatActivity() {
             })
         }
         card.addView(diffRow)
+
+        // ★ V5.6: 背景音乐开关
+        val mRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER; setPadding(16, 12, 16, 12) }
+        val mLabel = TextView(this).apply { text = "\uD83C\uDFB5 \u80CC\u666F\u97F3\u4E50:"; textSize = 15f; setTextColor(Color.parseColor("#4A3728")) }
+        mRow.addView(mLabel, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { gravity = Gravity.CENTER_VERTICAL })
+        val mSw = Switch(this).apply { isChecked = BgMusic.isEnabled() }
+        mRow.addView(mSw)
+        mSw.setOnCheckedChangeListener { _, on ->
+            BgMusic.setEnabled(this@MainActivity, on)
+            prefs.edit().putBoolean("bg_music", on).apply()
+        }
+        card.addView(mRow)
+
+        // ★ V5.6: 背景音乐音量滑块
+        val volRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER; setPadding(16, 8, 16, 12) }
+        val volLabel = TextView(this).apply { text = "🔊 音量:"; textSize = 13f; setTextColor(Color.parseColor("#4A3728")); setPadding(0, 0, 8, 0) }
+        volRow.addView(volLabel)
+        val volSeek = SeekBar(this).apply { 
+            max = 100; progress = (BgMusic.volume * 100).toInt()
+            setPadding(0, 0, 8, 0)
+        }
+        val volText = TextView(this).apply { 
+            text = "${volSeek.progress}"; textSize = 12f; setTextColor(Color.parseColor("#6D4C41"))
+            gravity = Gravity.CENTER; minWidth = 40
+        }
+        volRow.addView(volSeek, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        volRow.addView(volText)
+        volSeek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(sb: SeekBar?, v: Int, fromUser: Boolean) {
+                BgMusic.updateVolume(v / 100f)
+                volText.text = "$v"
+                prefs.edit().putFloat("music_volume", v / 100f).apply()
+            }
+            override fun onStartTrackingTouch(sb: SeekBar?) {}
+            override fun onStopTrackingTouch(sb: SeekBar?) {}
+        })
+        card.addView(volRow)
+
+        // ★ V6.1: KataGo AI 开关
+        val kRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER; setPadding(16, 12, 16, 12) }
+        val kLabel = TextView(this).apply { text = "🤖 KataGo AI:"; textSize = 15f; setTextColor(Color.parseColor("#4A3728")) }
+        kRow.addView(kLabel, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { gravity = Gravity.CENTER_VERTICAL })
+        val kSw = Switch(this).apply { isChecked = kataGoEnabled }
+        kRow.addView(kSw)
+        kSw.setOnCheckedChangeListener { _, on ->
+            // V6.1: 仅游戏未开始时可切换
+            if (game.isActive) {
+                showPopupMessage("⚠️ 请先结束当前对局再切换 KataGo")
+                kSw.isChecked = !on
+                return@setOnCheckedChangeListener
+            }
+            kataGoEnabled = on
+            prefs.edit().putBoolean("katago_enabled", on).apply()
+            if (on) {
+                // 开启 KataGo：如果引擎未初始化则启动
+                if (GameState.kataGoEngine?.isReady != true) {
+                    startKataGoEngine()
+                }
+            } else {
+                // 关闭 KataGo：停止引擎 + 关闭自动落子
+                GameState.kataGoEngine?.shutdown()
+                GameState.kataGoEngine = null
+                GameState.useKataGo = false
+                autoPlayEnabled = false; autoPlayWhite = false
+                goView.autoPlayBlock = false
+            }
+        }
+        card.addView(kRow)
 
         // 关闭按钮
         val closeBtn = Button(this).apply {
@@ -911,8 +1189,11 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         if (::goView.isInitialized) { stopRemindTimers(); animator?.cancel() }
         SoundFX.release()
+        BgMusic.stop()
         try { gamePresentation?.finish() } catch (_: Exception) {}
         gamePresentation = null; GamePresentation.instance = null
+        GameState.kataGoEngine?.shutdown()
+        GameState.kataGoEngine = null
         super.onDestroy()
     }
 }

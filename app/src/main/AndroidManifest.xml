@@ -12,7 +12,7 @@
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher"
-        android:label="围棋双屏"
+        android:label="KataGo围棋双屏"
         android:supportsRtl="true"
         android:theme="@style/Theme.GoDualScreen"
         android:resizeableActivity="true">

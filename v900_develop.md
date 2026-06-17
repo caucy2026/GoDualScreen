@@ -1,4 +1,4 @@
-# 双屏异显开发指南 — 730 芯片平台
+# 双屏异显开发指南 — V900 芯片平台
 
 > 基于 **GoDualScreen (KataGo围棋双屏 V6.2)** 项目实战经验总结。
 > 芯片: 8核 ARM + Mali-G52 6核 GPU，Android 12 (API 31)，双屏异显。
@@ -116,7 +116,7 @@ for (display in displayManager.displays) {
 }
 ```
 
-### 3.2 典型输出（730 平台）
+### 3.2 典型输出（V900 平台）
 
 ```
 Display ID=0  name=内置屏幕  size=1920x1080  valid=true
@@ -142,7 +142,7 @@ private fun launchWhiteScreen() {
 
 ### 3.4 常见 Display ID 映射
 
-| Display ID | 730 平台 | 通用 Android | 说明 |
+| Display ID | V900 平台 | 通用 Android | 说明 |
 |:----------:|----------|-------------|------|
 | 0 | 主屏 (LVDS/eDP) | `DEFAULT_DISPLAY` | 始终存在 |
 | 1 | (保留/内屏) | 可能不存在 | 视硬件而定 |
@@ -460,7 +460,7 @@ override fun onConfigurationChanged(newConfig: Configuration) {
 
 ### 9.2 Display ID 不连续
 
-730 平台的 Display ID 可能不连续（例如只有 0 和 2，没有 1）。代码不应假设 ID 递增：
+V900 平台的 Display ID 可能不连续（例如只有 0 和 2，没有 1）。代码不应假设 ID 递增：
 
 ```kotlin
 // ❌ 错误：假设 displayId 是连续的
@@ -478,7 +478,7 @@ for (display in displayManager.displays) {
 
 ```kotlin
 // 必须检查 display.isValid
-// 730 平台上，未连接物理屏幕的 Display 可能仍然存在但 isValid = false
+// V900 平台上，未连接物理屏幕的 Display 可能仍然存在但 isValid = false
 if (display.isValid) {
     // 只有连接了物理屏幕的 Display 才会 isValid
 }
@@ -650,4 +650,4 @@ class SecondaryActivity : AppCompatActivity() {
 
 ---
 
-> 📅 文档版本: V1.0 | 基于 GoDualScreen V6.2 | 适用平台: 730 系列芯片 + Android 12+
+> 📅 文档版本: V1.0 | 基于 GoDualScreen V6.2 | 适用平台: V900 系列芯片 + Android 12+

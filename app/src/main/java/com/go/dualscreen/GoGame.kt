@@ -589,7 +589,7 @@ class GoGame(boardSize: Int = 19) {
     fun suggestMove(player: Int): Triple<Int, Int, String>? {
         if (!isActive || isGameOver) return null
 
-        // ★ KataGo 引擎优先
+        // ★ V6.5: 仅使用 KataGo 引擎
         val kg = GameState.kataGoEngine
         if (kg != null && kg.isReady) {
             val color = if (player == PLAYER_BLACK) "b" else "w"
@@ -612,8 +612,7 @@ class GoGame(boardSize: Int = 19) {
                 }
             }
         }
-        // ★ V5: KataGo 不可用时返回 null
-        return null
+        return null  // V6.5: KataGo 不可用时返回 null，不再回退旧算法
     }
 
     /** V5.2: 导出 GoGame 棋盘字符串（用于与 KataGo showboard 对比） */
@@ -642,59 +641,75 @@ class GoGame(boardSize: Int = 19) {
         return sb.toString()
     }
 
-    /** 旧 Alpha-Beta 引擎（KataGo 不可用时的回退） */
-    private fun suggestMoveLegacy(player: Int): Triple<Int, Int, String>? {
-        val startMs = System.currentTimeMillis(); val deadline = startMs + 3000L
-        val opp = if (player==PLAYER_BLACK) PLAYER_WHITE else PLAYER_BLACK
-        if (totalMoves < 4) {
-            for ((sr,sc) in getStarPoints()) if (board[sr][sc]==EMPTY) { val cl=('A'+sc.coerceIn(0,25)); val rl=boardSize-sr; return Triple(sr,sc,"$cl$rl 星位") }
-            val cor=listOf(Pair(0,0),Pair(0,boardSize-1),Pair(boardSize-1,0),Pair(boardSize-1,boardSize-1))
-            for ((cr,cc) in cor) if (board[cr][cc]==EMPTY) { val cl=('A'+cc.coerceIn(0,25)); val rl=boardSize-cr; return Triple(cr,cc,"$cl$rl 占角") }
-        }
-        val rootWb = WorkBoard(boardSize); rootWb.snapFrom(this)
-        val rootMoves = genOrderedMoves(rootWb, player)
-        if (rootMoves.isEmpty()) return null
-        val maxCands = when { totalMoves<12 -> 30; totalMoves<30 -> 45; else -> 60 }
-        val topMoves = rootMoves.take(maxCands)
-        val numThreads = maxOf(1, minOf(Runtime.getRuntime().availableProcessors(), 7))
-        val bestAtomic = java.util.concurrent.atomic.AtomicReference<Pair<Pair<Int,Int>, Double>>()
-        val latch = java.util.concurrent.CountDownLatch(numThreads)
-        val chunk = (topMoves.size + numThreads - 1) / numThreads
-        var searchDepth = 0
-        repeat(numThreads) { t ->
-            Thread {
-                try {
-                    val wb = WorkBoard(boardSize); wb.snapFrom(this@GoGame)
-                    for (d in 2..3) {
-                        if (System.currentTimeMillis() > deadline) break; searchDepth = d
-                        val st=t*chunk; val ed=minOf(st+chunk, topMoves.size)
-                        for (i in st until ed) {
-                            if (System.currentTimeMillis() > deadline) break
-                            val (r,c)=topMoves[i]; val undo=wb.tryPlace(r,c,player) ?: continue
-                            val v=alphaBeta(wb, d-1, -1e9, 1e9, opp, player); wb.undoPlace(r,c,player,undo)
-                            if (v>bestAtomic.get()?.second ?: -1e9) bestAtomic.set(Pair(Pair(r,c),v))
-                        }
-                    }
-                } catch (_: Exception) {}
-                latch.countDown()
-            }.start()
-        }
-        try { latch.await(3500, java.util.concurrent.TimeUnit.MILLISECONDS) } catch (_: Exception) {}
-        val best = bestAtomic.get() ?: return null
-        val (row,col) = best.first; val usedMs = System.currentTimeMillis()-startMs
-        val cl=('A'+col.coerceIn(0,25)); val rl=boardSize-row
-        val myT=terrCntFast(player); val oppT=terrCntFast(opp)
-        val myC=if(player==PLAYER_BLACK)capturedByBlack else capturedByWhite
-        val oppC=if(player==PLAYER_BLACK)capturedByWhite else capturedByBlack
-        val lead=(myT+myC)-(oppT+oppC+KOMI)
-        val emoji=when{lead>8->"△";lead>2->"○";lead>-2->"=";lead>-8->"·";else->"▽"}
-        val szLabel=when(boardSize){9->"9路";13->"13路";else->""}
-        return Triple(row,col,"$cl$rl | AB深度${searchDepth} ${usedMs}ms $szLabel | $emoji${"%.0f".format(Math.abs(lead))}目")
-    }
-
     // ==================== 游戏控制 ====================
 
-    fun startGame() { restart(); currentPlayer = PLAYER_BLACK; isActive = true }
+    /** V8.0: 让子数 (0=无让子, 2-9) */
+    var handicapStones = 0
+        private set
+
+    fun setHandicap(n: Int) {
+        if (isActive) return
+        handicapStones = n.coerceIn(0, 9)
+    }
+
+    fun startGame() {
+        restart()
+        // V8.1: 让子处理 (2-9子)
+        if (handicapStones >= 2) {
+            placeHandicapStones()
+            currentPlayer = PLAYER_WHITE  // 让子后白方先行
+        } else {
+            currentPlayer = PLAYER_BLACK
+        }
+        isActive = true
+    }
+
+    /** V8.0: 按标准星位放置让子 */
+    private fun placeHandicapStones() {
+        val stars = getStarPoints()
+        // 标准让子顺序 (围棋规则)
+        val order = when (boardSize) {
+            19 -> when (handicapStones) {
+                2 -> listOf(0, 2)       // 对角星
+                3 -> listOf(0, 2, 4)    // 对角+天元
+                4 -> listOf(0, 2, 6, 8) // 四角星
+                5 -> listOf(0, 2, 4, 6, 8) // 四角+天元
+                6 -> listOf(0, 2, 3, 5, 6, 8) // 六星
+                7 -> listOf(0, 2, 3, 4, 5, 6, 8)
+                8 -> listOf(0, 1, 2, 3, 5, 6, 7, 8)
+                else -> (0 until handicapStones).toList()
+            }
+            13 -> when (handicapStones) {
+                2 -> listOf(0, 2)
+                3 -> listOf(0, 2, 4)
+                4 -> listOf(0, 2, 6, 8)
+                5 -> listOf(0, 2, 4, 6, 8)
+                else -> (0 until minOf(handicapStones, stars.size)).toList()
+            }
+            9 -> when (handicapStones) {
+                2 -> listOf(0, 2)
+                3 -> listOf(0, 2, 4)
+                4 -> listOf(0, 2, 6, 8)
+                5 -> listOf(0, 2, 4, 6, 8)
+                else -> (0 until minOf(handicapStones, stars.size)).toList()
+            }
+            else -> (0 until minOf(handicapStones, stars.size)).toList()
+        }
+        for (idx in order) {
+            if (idx < stars.size) {
+                val (r, c) = Pair(stars[idx][0], stars[idx][1])
+                if (board[r][c] == EMPTY) {
+                    board[r][c] = PLAYER_BLACK
+                    totalMoves++
+                    blackMoves++
+                    pieceOrder[r][c] = blackMoves
+                    lastRow = r; lastCol = c
+                    moveHistory.add(MoveRecord(PLAYER_BLACK, r, c, emptyList(), emptyMap(),
+                        -1, -1, 0, 0, 0))
+                }
+            }
+        }
+    }
 
     fun restart() {
         initBoards()
@@ -707,6 +722,7 @@ class GoGame(boardSize: Int = 19) {
         koRestrictedRow = -1; koRestrictedCol = -1
         blackTerritory = 0; whiteTerritory = 0
         totalMoves = 0
+        blackMoves = 0; whiteMoves = 0  // V6.2: 重新开始后棋子序号复位
         moveHistory.clear()
         gameOverReason = ""
     }

@@ -15,6 +15,7 @@ import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.SeekBar
 import android.widget.Switch
 import android.widget.TextView
 
@@ -52,7 +53,7 @@ class GamePresentation : Activity() {
 
         val root = LinearLayout(this).apply {
             orientation = if (isLandscape()) LinearLayout.HORIZONTAL else LinearLayout.VERTICAL
-            setBackgroundColor(Color.parseColor("#DEB887"))
+            setBackgroundColor(Color.parseColor("#D4C4A8"))
         }
         goView = GoView(this).apply {
             this.playerPerspective = this@GamePresentation.playerPerspective
@@ -86,7 +87,7 @@ class GamePresentation : Activity() {
         leftPanel.addView(hurryBtn, LinearLayout.LayoutParams(smallSize, smallSize).apply { bottomMargin = 8 })
 
         // Pass 虚手按钮
-        val passBtn = create3DButton("\u270B\n\u865A\u624B", "#2196F3", "#0D47A1", smallSize)
+        val passBtn = create3DButton("\u270B\n\u865A\u624B", "#A08060", "#806040", smallSize)
         passBtn.setOnClickListener {
             if (!game.isActive || game.isGameOver) { showPopupMessage("\u6E38\u620F\u672A\u5F00\u59CB"); return@setOnClickListener }
             if (game.isPaused) { showPopupMessage("\u6E38\u620F\u6682\u505C\u4E2D\uFF0C\u8BF7\u5148\u6062\u590D"); return@setOnClickListener }
@@ -96,33 +97,23 @@ class GamePresentation : Activity() {
         leftPanel.addView(passBtn, LinearLayout.LayoutParams(smallSize, smallSize).apply { bottomMargin = 8 })
 
         // 提示按钮（通过 MainActivity 后台计算，防 ANR）
-        val hintBtn = create3DButton("\uD83D\uDCA1\n\u63D0\u793A", "#00BCD4", "#006064", smallSize)
+        val hintBtn = create3DButton("\uD83D\uDCA1\nAI\u63D0\u793A", "#607888", "#405868", smallSize)
         hintBtn.setOnClickListener {
-            if (!game.isActive || game.isGameOver) { showPopupMessage("\u6E38\u620F\u672A\u5F00\u59CB"); return@setOnClickListener }
-            if (game.isPaused) { showPopupMessage("\u6E38\u620F\u6682\u505C\u4E2D"); return@setOnClickListener }
-            if (game.currentPlayer != playerPerspective) { showPopupMessage("\u73B0\u5728\u662F\u5BF9\u65B9\u7684\u56DE\u5408\uFF0C\u4E0D\u80FD\u4F7F\u7528\u63D0\u793A"); return@setOnClickListener }
+            if (!game.isActive || game.isGameOver) { showPopupMessage("游戏未开始"); return@setOnClickListener }
+            if (game.isPaused) { showPopupMessage("游戏暂停中"); return@setOnClickListener }
+            if (getMainActivity?.invoke()?.autoPlayWhite == true) { showPopupMessage("🤖 AI自动进行中，无需提示"); return@setOnClickListener }
+            if (game.currentPlayer != playerPerspective) { showPopupMessage("现在是对手的回合，不能使用提示"); return@setOnClickListener }
             // V6.1: KataGo 关闭检查
             if (getMainActivity?.invoke()?.kataGoEnabled != true) {
-                showPopupMessage("\u26A0\uFE0F \u8BF7\u5148\u5728\u8BBE\u7F6E\u4E2D\u5F00\u542F KataGo")
+                showPopupMessage("⚠️ 请先在设置中开启 KataGo")
                 return@setOnClickListener
             }
-            // 委托 MainActivity 后台计算
-            val ma = getMainActivity?.invoke() ?: return@setOnClickListener
-            ma.computeHintFor?.invoke(playerPerspective) { hint ->
-                runOnUiThread {
-                    goView?.clearMessage()
-                    if (hint == null) { showPopupMessage("\u6682\u65E0\u63A8\u8350\u4F4D\u7F6E"); return@runOnUiThread }
-                    val (row, col, reason) = hint
-                    goView?.showHint(row, col)
-                    goView?.message = reason
-                    goView?.showTerritory(game.getTerritoryGain(playerPerspective, row, col))
-                    goView?.invalidate()
-                }
-            }
+            // ★ V6.5: 统一使用 kata-analyze 深度分析
+            getMainActivity?.invoke()?.runKataAnalyze(playerPerspective)
         }
         leftPanel.addView(hintBtn, LinearLayout.LayoutParams(smallSize, smallSize).apply { bottomMargin = 8 })
 
-        val pauseBtn = create3DButton("\u23F8\n\u6682\u505C", "#607D8B", "#37474F", smallSize)
+        val pauseBtn = create3DButton("\u23F8\n\u6682\u505C", "#988878", "#786858", smallSize)
         pauseBtnWhite = pauseBtn
         pauseBtn.setOnClickListener {
             if (!game.isActive || game.isGameOver) { showPopupMessage("\u6E38\u620F\u672A\u5F00\u59CB"); return@setOnClickListener }
@@ -154,7 +145,7 @@ class GamePresentation : Activity() {
             setPadding(4, 4, 4, 4)
         }
         autoRow.addView(TextView(this).apply {
-            text = "\uD83E\uDD16\u81EA\u52A8"; textSize = 10f; setTextColor(Color.parseColor("#6D4C41"))
+            text = "\uD83E\uDD16AI\u81EA\u52A8"; textSize = 10f; setTextColor(Color.parseColor("#6D4C41"))
             gravity = Gravity.CENTER_VERTICAL
         }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { rightMargin = 4 })
         val autoSwGP = Switch(this).apply {
@@ -174,8 +165,60 @@ class GamePresentation : Activity() {
         autoRow.addView(autoSwGP)
         leftPanel.addView(autoRow, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = 4 })
 
+        // ★ V8.3: 让子系统 (白方让黑方弱方, 2-9子, 左右滑动)
+        // 注意: 滑动条和数值View必须在 Switch 之前声明, 因为 Switch 监听器引用它们
+        val handiValText = TextView(this).apply {
+            text = "2"; textSize = 11f; setTextColor(Color.parseColor("#6D4C41"))
+            gravity = Gravity.CENTER; visibility = View.GONE; setPadding(6, 0, 6, 0)
+        }
+        val handiSeek = SeekBar(this).apply {
+            max = 7; progress = 0; visibility = View.GONE  // 0→2子, 7→9子
+        }
+        handiSeek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(sb: SeekBar?, v: Int, fromUser: Boolean) {
+                val n = v + 2
+                handiValText.text = n.toString()
+                game.setHandicap(n)
+            }
+            override fun onStartTrackingTouch(sb: SeekBar?) {}
+            override fun onStopTrackingTouch(sb: SeekBar?) {}
+        })
+
+        val handiRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER
+            setPadding(4, 4, 4, 4)
+        }
+        handiRow.addView(TextView(this).apply {
+            text = "\uD83C\uDFAF\u8BA9\u5B50"; textSize = 10f; setTextColor(Color.parseColor("#6D4C41"))
+            gravity = Gravity.CENTER_VERTICAL
+        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { rightMargin = 4 })
+        val handiSw = Switch(this).apply {
+            isChecked = false
+            setOnCheckedChangeListener { _, on ->
+                if (game.isActive) { showPopupMessage("\u8BF7\u5148\u7ED3\u675F\u5F53\u524D\u5BF9\u5C40"); isChecked = false; return@setOnCheckedChangeListener }
+                handiSeek.visibility = if (on) View.VISIBLE else View.GONE
+                handiValText.visibility = if (on) View.VISIBLE else View.GONE
+                if (on) {
+                    val n = handiSeek.progress + 2
+                    game.setHandicap(n); handiValText.text = n.toString()
+                } else {
+                    game.setHandicap(0)
+                }
+            }
+        }
+        handiRow.addView(handiSw)
+        leftPanel.addView(handiRow, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = 2 })
+        // 让子数值行: 左右滑动条
+        val handiSeekRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER
+            setPadding(4, 0, 4, 2)
+        }
+        handiSeekRow.addView(handiSeek, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        handiSeekRow.addView(handiValText, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { leftMargin = 4 })
+        leftPanel.addView(handiSeekRow, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = 4 })
+
         val verLabel = TextView(this).apply {
-            text = "KataGo围棋双屏\nV6.1"; textSize = 9f
+            text = "KataGo围棋双屏\nV8.3"; textSize = 9f
             setTextColor(Color.parseColor("#998B7388")); gravity = Gravity.CENTER
             setPadding(2, 8, 2, 2)
         }
@@ -215,11 +258,11 @@ class GamePresentation : Activity() {
             bottomMargin = if (isLandscape()) 12 else 0; rightMargin = if (isLandscape()) 0 else 12
         })
 
-        val btnSize = (resources.displayMetrics.density * 120).toInt()
+        val btnSize = (resources.displayMetrics.density * 100).toInt()
         val btnMargin = if (isLandscape()) 24 else 0; val btnMargin2 = if (isLandscape()) 0 else 16
-        startBtn = create3DButton("\u25B6\n\u5F00\u59CB", "#4CAF50", "#2E7D32", btnSize)
+        startBtn = createPlaqueButton("\u25B6\n\u5F00\u59CB", "#4A6A50", "#6B8E6B", btnSize)
         startBtn!!.setOnClickListener { onStartOrRestart?.invoke() }
-        val undoBtn = create3DButton("\u21A9\n\u6094\u68CB", "#78909C", "#455A64", btnSize)
+        val undoBtn = createPlaqueButton("\u21A9\n\u6094\u68CB", "#6B5540", "#A89078", btnSize)
         undoBtn.setOnClickListener { onUndoRequest?.invoke() }
         panel.addView(startBtn, LinearLayout.LayoutParams(btnSize, btnSize).apply { bottomMargin = btnMargin; rightMargin = btnMargin2 })
         panel.addView(undoBtn, LinearLayout.LayoutParams(btnSize, btnSize).apply { bottomMargin = 4; rightMargin = btnMargin2 })
@@ -235,13 +278,42 @@ class GamePresentation : Activity() {
 
     private fun create3DButton(text: String, colorTop: String, colorBottom: String, size: Int): Button = Button(this).apply {
         this.text = text; textSize = 15f; setTextColor(Color.WHITE); gravity = Gravity.CENTER
-        setPadding(8, 8, 8, 8); setBackgroundColor(Color.TRANSPARENT)
+        setPadding(12, 8, 12, 8); setBackgroundColor(Color.TRANSPARENT)
+        val radius = if (size > 80) size * 0.22f else size * 0.28f
         background = GradientDrawable().apply {
-            shape = GradientDrawable.OVAL; setSize(size, size)
+            shape = GradientDrawable.RECTANGLE; cornerRadius = radius
+            setSize(size, size)
             colors = intArrayOf(Color.parseColor(colorTop), Color.parseColor(colorBottom))
-            orientation = GradientDrawable.Orientation.TOP_BOTTOM; setStroke(3, Color.parseColor("#CCFFFFFF"))
+            orientation = GradientDrawable.Orientation.TOP_BOTTOM; setStroke(2, Color.parseColor("#88D4C8B8"))
         }
-        elevation = 12f; isAllCaps = false
+        elevation = 8f; isAllCaps = false
+    }
+
+    /** V7.2: 古典匾额风格大按钮 */
+    private fun createPlaqueButton(text: String, woodDark: String, woodLight: String, size: Int): Button {
+        return Button(this).apply {
+            this.text = text; textSize = 17f; gravity = Gravity.CENTER
+            setTextColor(Color.parseColor("#F5EDE0"))
+            setShadowLayer(2f, 1f, 1f, Color.parseColor("#60000000"))
+            setPadding(20, 12, 20, 12); setBackgroundColor(Color.TRANSPARENT)
+            isAllCaps = false; typeface = android.graphics.Typeface.DEFAULT_BOLD
+            val radius = size * 0.18f; val inset = (size * 0.08f).toInt()
+            val frame = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE; cornerRadius = radius
+                setSize(size, size)
+                colors = intArrayOf(Color.parseColor(woodDark), Color.parseColor("#3A2010"))
+                orientation = GradientDrawable.Orientation.TOP_BOTTOM
+            }
+            val panel = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE; cornerRadius = radius * 0.75f
+                colors = intArrayOf(Color.parseColor(woodLight), Color.parseColor(woodDark))
+                orientation = GradientDrawable.Orientation.TOP_BOTTOM
+                setStroke(1, Color.parseColor("#60C8B090"))
+            }
+            val insetDrawable = android.graphics.drawable.InsetDrawable(panel, inset, inset, inset, inset)
+            background = android.graphics.drawable.LayerDrawable(arrayOf(frame, insetDrawable))
+            elevation = 6f
+        }
     }
 
     fun showPopupMessage(msg: String) {
@@ -278,6 +350,9 @@ class GamePresentation : Activity() {
     fun clearMessage() = goView?.clearMessage()
     fun showHint(row: Int, col: Int) { goView?.showHint(row, col) }
     fun clearHint() { goView?.clearHint(); goView?.clearTerritory() }
+    fun showTerritory(pts: Set<Pair<Int,Int>>) { goView?.showTerritory(pts) }
+    fun showAnalysis(pts: List<GoView.AnalysisPoint>) { goView?.showAnalysis(pts) }
+    fun clearAnalysis() { goView?.clearAnalysis() }
     fun startWinAnimation() = goView?.startWinAnimation()
     fun startLoseAnimation() = goView?.startLoseAnimation()
     fun updateAnimation(): Boolean = goView?.updateAnimation() ?: false

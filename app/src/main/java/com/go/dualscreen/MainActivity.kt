@@ -25,7 +25,7 @@ import androidx.appcompat.app.AppCompatActivity
 class MainActivity : AppCompatActivity() {
 
     private lateinit var game: GoGame
-    private lateinit var goView: GoView
+    lateinit var goView: GoView  // V6.3: public for analysis access
     private lateinit var statusText: TextView
     private lateinit var capturesText: TextView
     private lateinit var countdownText: TextView
@@ -160,7 +160,7 @@ class MainActivity : AppCompatActivity() {
     private fun initMainUI() {
         val root = LinearLayout(this).apply {
             orientation = if (isLandscape()) LinearLayout.HORIZONTAL else LinearLayout.VERTICAL
-            setBackgroundColor(Color.parseColor("#DEB887"))
+            setBackgroundColor(Color.parseColor("#D4C4A8"))
         }
         goView = GoView(this).apply {
             playerPerspective = myPlayer
@@ -196,7 +196,7 @@ class MainActivity : AppCompatActivity() {
         leftPanel.addView(hurryBtn, LinearLayout.LayoutParams(smallSize, smallSize).apply { bottomMargin = 8 })
 
         // Pass 虚手按钮
-        val passBtn = create3DButton("\u270B\n\u865A\u624B", "#2196F3", "#0D47A1", smallSize)
+        val passBtn = create3DButton("\u270B\n\u865A\u624B", "#A08060", "#806040", smallSize)
         passBtn.setOnClickListener {
             if (!game.isActive || game.isGameOver) { showMsgToPlayer(myPlayer, "\u6E38\u620F\u672A\u5F00\u59CB"); return@setOnClickListener }
             if (game.isPaused) { showMsgToPlayer(myPlayer, "\u6E38\u620F\u6682\u505C\u4E2D\uFF0C\u8BF7\u5148\u6062\u590D"); return@setOnClickListener }
@@ -206,17 +206,18 @@ class MainActivity : AppCompatActivity() {
         leftPanel.addView(passBtn, LinearLayout.LayoutParams(smallSize, smallSize).apply { bottomMargin = 8 })
 
         // 提示按钮（黑方在虚手下方）
-        val hintBtn = create3DButton("\uD83D\uDCA1\n\u63D0\u793A", "#00BCD4", "#006064", smallSize)
+        val hintBtn = create3DButton("\uD83D\uDCA1\nAI\u63D0\u793A", "#607888", "#405868", smallSize)
         hintBtn.setOnClickListener {
             if (!game.isActive || game.isGameOver) { showMsgToPlayer(myPlayer, "\u6E38\u620F\u672A\u5F00\u59CB"); return@setOnClickListener }
             if (game.isPaused) { showMsgToPlayer(myPlayer, "\u6E38\u620F\u6682\u505C\u4E2D"); return@setOnClickListener }
+            if (autoPlayEnabled) { showMsgToPlayer(myPlayer, "\uD83E\uDD16 AI\u81EA\u52A8\u4E2D\uFF0C\u65E0\u9700\u63D0\u793A"); return@setOnClickListener }
             if (game.currentPlayer != myPlayer) { showMsgToPlayer(myPlayer, "\u73B0\u5728\u662F\u5BF9\u65B9\u7684\u56DE\u5408\uFF0C\u4E0D\u80FD\u4F7F\u7528\u63D0\u793A"); return@setOnClickListener }
             handleHint()
         }
         leftPanel.addView(hintBtn, LinearLayout.LayoutParams(smallSize, smallSize).apply { bottomMargin = 8 })
 
         // 数目按钮
-        val scoreBtn = create3DButton("\uD83D\uDCCA\n\u6570\u76EE", "#FF6F00", "#BF360C", smallSize)
+        val scoreBtn = create3DButton("\uD83D\uDCCA\n\u6570\u5B50", "#688078", "#486058", smallSize)
         scoreBtn.setOnClickListener {
             if (!game.isActive || game.isGameOver) { showMsgToPlayer(myPlayer, "\u6E38\u620F\u672A\u5F00\u59CB"); return@setOnClickListener }
             if (game.isPaused) { showMsgToPlayer(myPlayer, "\u6E38\u620F\u6682\u505C\u4E2D"); return@setOnClickListener }
@@ -224,7 +225,7 @@ class MainActivity : AppCompatActivity() {
         }
         leftPanel.addView(scoreBtn, LinearLayout.LayoutParams(smallSize, smallSize).apply { bottomMargin = 8 })
 
-        val pauseBtn = create3DButton("\u23F8\n\u6682\u505C", "#607D8B", "#37474F", smallSize)
+        val pauseBtn = create3DButton("\u23F8\n\u6682\u505C", "#988878", "#786858", smallSize)
         pauseBtnBlack = pauseBtn
         var pauseBtnRef: Button? = null; pauseBtnRef = pauseBtn
         pauseBtn.setOnClickListener {
@@ -271,7 +272,7 @@ class MainActivity : AppCompatActivity() {
             setPadding(4, 4, 4, 4)
         }
         autoRow.addView(TextView(this).apply {
-            text = "\uD83E\uDD16\u81EA\u52A8"; textSize = 10f; setTextColor(Color.parseColor("#6D4C41"))
+            text = "\uD83E\uDD16AI\u81EA\u52A8"; textSize = 10f; setTextColor(Color.parseColor("#6D4C41"))
             gravity = Gravity.CENTER_VERTICAL
         }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { rightMargin = 4 })
         val autoSw = Switch(this).apply {
@@ -295,7 +296,7 @@ class MainActivity : AppCompatActivity() {
 
         // 版本信息（左下角）
         val verLabel = TextView(this).apply {
-            text = "KataGo围棋双屏\nV6.1"; textSize = 9f
+            text = "KataGo围棋双屏\nV8.3"; textSize = 9f
             setTextColor(Color.parseColor("#998B7388")); gravity = Gravity.CENTER
             setPadding(2, 8, 2, 2)
         }
@@ -334,14 +335,14 @@ class MainActivity : AppCompatActivity() {
             bottomMargin = if (isLandscape()) 12 else 0; rightMargin = if (isLandscape()) 0 else 12
         })
 
-        val btnSize = (resources.displayMetrics.density * 120).toInt()
+        val btnSize = (resources.displayMetrics.density * 100).toInt()
         val btnMargin = if (isLandscape()) 24 else 0; val btnMargin2 = if (isLandscape()) 0 else 16
-        startBtn = create3DButton("\u25B6\n\u5F00\u59CB", "#4CAF50", "#2E7D32", btnSize)
+        startBtn = createPlaqueButton("\u25B6\n\u5F00\u59CB", "#4A6A50", "#6B8E6B", btnSize)
         startBtn.setOnClickListener {
             if (game.isPaused) { showMsgToPlayer(myPlayer, "\u6E38\u620F\u6682\u505C\u4E2D\uFF0C\u8BF7\u5148\u6062\u590D\u6E38\u620F"); return@setOnClickListener }
             onStartOrRestart(myPlayer)
         }
-        undoBtn = create3DButton("\u21A9\n\u6094\u68CB", "#78909C", "#455A64", btnSize)
+        undoBtn = createPlaqueButton("\u21A9\n\u6094\u68CB", "#6B5540", "#A89078", btnSize)
         undoBtn.setOnClickListener {
             if (game.isPaused) { showMsgToPlayer(myPlayer, "\u6E38\u620F\u6682\u505C\u4E2D\uFF0C\u65E0\u6CD5\u6094\u68CB"); return@setOnClickListener }
             requestUndo(myPlayer)
@@ -349,7 +350,7 @@ class MainActivity : AppCompatActivity() {
         panel.addView(startBtn, LinearLayout.LayoutParams(btnSize, btnSize).apply { bottomMargin = btnMargin; rightMargin = btnMargin2 })
         panel.addView(undoBtn, LinearLayout.LayoutParams(btnSize, btnSize).apply { bottomMargin = 4; rightMargin = btnMargin2 })
 
-        val exitBtn = create3DButton("\uD83D\uDEAA\n\u9000\u51FA", "#C62828", "#8E0000", btnSize)
+        val exitBtn = createPlaqueButton("\uD83D\uDEAA\n\u9000\u51FA", "#5A3028", "#905850", btnSize)
         exitBtn.setOnClickListener {
             if (game.isPaused && game.pausedByPlayer != myPlayer) { showMsgToPlayer(myPlayer, "\u6E38\u620F\u6682\u505C\u4E2D\uFF0C\u8BF7\u7B49\u5F85\u5BF9\u65B9\u6062\u590D"); return@setOnClickListener }
             requestExit()
@@ -377,13 +378,44 @@ class MainActivity : AppCompatActivity() {
 
     private fun create3DButton(text: String, colorTop: String, colorBottom: String, size: Int) = Button(this).apply {
         this.text = text; textSize = 15f; setTextColor(Color.WHITE); gravity = Gravity.CENTER
-        setPadding(8, 8, 8, 8); setBackgroundColor(Color.TRANSPARENT)
+        setPadding(12, 8, 12, 8); setBackgroundColor(Color.TRANSPARENT)
+        val radius = if (size > 80) size * 0.22f else size * 0.28f
         background = GradientDrawable().apply {
-            shape = GradientDrawable.OVAL; setSize(size, size)
+            shape = GradientDrawable.RECTANGLE; cornerRadius = radius
+            setSize(size, size)
             colors = intArrayOf(Color.parseColor(colorTop), Color.parseColor(colorBottom))
-            orientation = GradientDrawable.Orientation.TOP_BOTTOM; setStroke(3, Color.parseColor("#CCFFFFFF"))
+            orientation = GradientDrawable.Orientation.TOP_BOTTOM; setStroke(2, Color.parseColor("#88D4C8B8"))
         }
-        elevation = 12f; isAllCaps = false
+        elevation = 8f; isAllCaps = false
+    }
+
+    /** V7.2: 古典匾额风格大按钮 (雕梁画栋) */
+    private fun createPlaqueButton(text: String, woodDark: String, woodLight: String, size: Int): Button {
+        return Button(this).apply {
+            this.text = text; textSize = 17f; gravity = Gravity.CENTER
+            setTextColor(Color.parseColor("#F5EDE0"))
+            setShadowLayer(2f, 1f, 1f, Color.parseColor("#60000000"))
+            setPadding(20, 12, 20, 12); setBackgroundColor(Color.TRANSPARENT)
+            isAllCaps = false; typeface = android.graphics.Typeface.DEFAULT_BOLD
+            val radius = size * 0.18f; val inset = (size * 0.08f).toInt()
+            // 外层深色木框
+            val frame = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE; cornerRadius = radius
+                setSize(size, size)
+                colors = intArrayOf(Color.parseColor(woodDark), Color.parseColor("#3A2010"))
+                orientation = GradientDrawable.Orientation.TOP_BOTTOM
+            }
+            // 内层浅色面板
+            val panel = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE; cornerRadius = radius * 0.75f
+                colors = intArrayOf(Color.parseColor(woodLight), Color.parseColor(woodDark))
+                orientation = GradientDrawable.Orientation.TOP_BOTTOM
+                setStroke(1, Color.parseColor("#60C8B090"))
+            }
+            val insetDrawable = android.graphics.drawable.InsetDrawable(panel, inset, inset, inset, inset)
+            background = android.graphics.drawable.LayerDrawable(arrayOf(frame, insetDrawable))
+            elevation = 6f
+        }
     }
 
     private fun updateButtonState() {
@@ -534,7 +566,9 @@ class MainActivity : AppCompatActivity() {
         updateButtonState(); updateStatusDisplay(); updateCapturesDisplay()
         gamePresentation?.updateButtonState(); startRemindTimers()
         resetKataGoBoard()
-        SoundFX.playVoice(this, R.raw.your_turn_black)
+        // V8.3: 让子后白方先行，提示音对应
+        val voiceRes = if (game.currentPlayer == GoGame.PLAYER_BLACK) R.raw.your_turn_black else R.raw.your_turn_white
+        SoundFX.playVoice(this, voiceRes)
     }
     private fun requestRestart(player: Int) {
         if (player == GoGame.PLAYER_BLACK) {
@@ -669,8 +703,8 @@ class MainActivity : AppCompatActivity() {
         val r = game.pass(player)
         if (!r.success) { showMsg(r.message); return }
         SoundFX.playStoneSound()
-        goView.clearPreview(); goView.clearHint(); goView.clearTerritory(); goView.clearMessage(); goView.invalidate()
-        gamePresentation?.clearMessage(); gamePresentation?.clearHint(); gamePresentation?.refreshView()
+        goView.clearPreview(); goView.clearHint(); goView.clearTerritory(); goView.clearMessage(); goView.clearAnalysis(); goView.invalidate()
+        gamePresentation?.clearMessage(); gamePresentation?.clearHint(); gamePresentation?.clearAnalysis(); gamePresentation?.refreshView()
         updateStatusDisplay(); updateCapturesDisplay()
         if (r.gameOver) {
             stopRemindTimers(); updateButtonState(); gamePresentation?.updateButtonState()
@@ -694,9 +728,9 @@ class MainActivity : AppCompatActivity() {
         }
         SoundFX.playStoneSound()
         if (r.captures > 0) SoundFX.playCaptureSound()
-        // V5.0: 清除提示圈和领土标记，但保留分析文字（下步落子时才清除）
-        goView.clearPreview(); goView.clearHint(); goView.clearTerritory(); goView.invalidate()
-        gamePresentation?.clearHint(); gamePresentation?.refreshView()
+        // ★ V6.3: 清除提示圈、领土标记和分析数据
+        goView.clearPreview(); goView.clearHint(); goView.clearTerritory(); goView.clearAnalysis(); goView.invalidate()
+        gamePresentation?.clearHint(); gamePresentation?.clearAnalysis(); gamePresentation?.refreshView()
         updateStatusDisplay(); updateCapturesDisplay()
         if (r.gameOver) {
             stopRemindTimers(); updateButtonState(); gamePresentation?.updateButtonState()
@@ -735,6 +769,65 @@ class MainActivity : AppCompatActivity() {
     }
 
     fun handleHintRequest() { handleHint() }
+
+    /** V6.9: AI提示 - 1s分析3候选，思考期间禁止落子 */
+    fun runKataAnalyze(player: Int) {
+        val kg = GameState.kataGoEngine ?: return
+        if (!kg.isReady || aiThinking) return
+        aiThinking = true
+        // V6.9: 思考期间禁止落子
+        goView.autoPlayBlock = true
+        gamePresentation?.go?.autoPlayBlock = true
+        val thinkingMsg = "🤖 AI 思考中..."
+        if (player == myPlayer) { goView.message = thinkingMsg; goView.invalidate() }
+        else gamePresentation?.showMessage(thinkingMsg)
+        val color = if (player == GoGame.PLAYER_BLACK) "b" else "w"
+        Thread {
+            try {
+                val items = kg.analyze(color, maxTime = 1f, maxMoves = 3)
+                handler.post {
+                    aiThinking = false
+                    kg.stopSearch()
+                    // V6.9: 恢复落子
+                    goView.autoPlayBlock = false
+                    gamePresentation?.go?.autoPlayBlock = false
+                    if (player == myPlayer) { goView.clearMessage(); goView.clearAnalysis() }
+                    else { gamePresentation?.clearMessage(); gamePresentation?.clearAnalysis() }
+                    if (items.isEmpty()) {
+                        showMsgToPlayer(player, "🤖 暂无推荐，请自行判断")
+                        return@post
+                    }
+                    val best = items.first()
+                    val wrPct = "%.0f".format(best.winrate * 100)
+                    val leadDesc = when {
+                        best.scoreLead > 0.5f -> "领先${"%.1f".format(best.scoreLead)}目"
+                        best.scoreLead < -0.5f -> "落后${"%.1f".format(Math.abs(best.scoreLead))}目"
+                        else -> "均势"
+                    }
+                    val easyMsg = "🤖 推荐落这里！胜率${wrPct}% · $leadDesc"
+                    if (player == myPlayer) {
+                        goView.showHint(best.row, best.col)
+                        goView.message = easyMsg
+                    } else {
+                        gamePresentation?.showHint(best.row, best.col)
+                        gamePresentation?.showMessage(easyMsg)
+                    }
+                    val pts = items.map { GoView.AnalysisPoint(it.row, it.col, it.winrate, it.visits, it.scoreLead) }
+                    if (player == myPlayer) goView.showAnalysis(pts)
+                    else gamePresentation?.showAnalysis(pts)
+                    goView.invalidate(); gamePresentation?.refreshView()
+                }
+            } catch (e: Exception) {
+                handler.post {
+                    aiThinking = false
+                    kg.stopSearch()
+                    goView.autoPlayBlock = false
+                    gamePresentation?.go?.autoPlayBlock = false
+                    showMsgToPlayer(player, "🤖 分析中断，请重试")
+                }
+            }
+        }.start()
+    }
 
     /** 供 GamePresentation 调用的后台 AI 计算 */
     @JvmField var computeHintFor: ((Int, (Triple<Int,Int,String>?) -> Unit) -> Unit) = { player, cb ->
@@ -788,31 +881,14 @@ class MainActivity : AppCompatActivity() {
         }.start()
     }
 
-    /** 仅在自己屏幕显示提示（不传给副屏），圆圈显示落子后的包围圈 */
+    /** V6.5: 统一使用 kata-analyze 深度分析 */
     private fun handleHint() {
         if (aiThinking) { showMsgToPlayer(myPlayer, "🤖 正在思考中，请稍候..."); return }
-        // ★ V6.1: KataGo 已关闭
-        if (!kataGoEnabled) {
-            showMsgToPlayer(myPlayer, "⚠️ 请先在设置中开启 KataGo")
-            return
-        }
-        // ★ V4.8: KataGo 未就绪
+        if (!kataGoEnabled) { showMsgToPlayer(myPlayer, "⚠️ 请先在设置中开启 KataGo"); return }
         if (GameState.kataGoEngine?.isReady != true) {
-            val msg = "\u23F3 KataGo \u5F15\u64CE\u542F\u52A8\u4E2D\uFF0C\u8BF7\u7A0D\u5019..."
-            goView.message = msg; goView.invalidate()
-            gamePresentation?.showMessage(msg)
-            return
+            showMsgToPlayer(myPlayer, "⏳ KataGo 引擎启动中，请稍候..."); return
         }
-        computeAiAsync(myPlayer) { hint ->
-            goView.clearMessage()
-            if (hint == null) { showMsgToPlayer(myPlayer, "🤖 暂无可推荐位置"); return@computeAiAsync }
-            val (row, col, reason) = hint
-            goView.showHint(row, col)
-            goView.message = reason
-            val gainPts = game.getTerritoryGain(myPlayer, row, col)
-            goView.showTerritory(gainPts)
-            goView.invalidate()
-        }
+        runKataAnalyze(myPlayer)
     }
 
     /** 自动落子：分析结果显示在落子方屏幕 */
@@ -838,6 +914,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun handleScoring() {
         if (!game.isActive || game.isGameOver) return
+        // V8.0: 不足160手不能数子
+        if (game.totalMoves < 160) { showMsgToPlayer(myPlayer, "\u81F3\u5C11160\u624B\u540E\u624D\u80FD\u6570\u5B50"); return }
         game.calculateTerritoryTemp()
         val bTotal = game.blackTerritory + game.capturedByBlack
         val wTotal = game.whiteTerritory + game.capturedByWhite + GoGame.KOMI
@@ -1186,6 +1264,15 @@ class MainActivity : AppCompatActivity() {
     override fun onBackPressed() { finishAffinity() }
     override fun onUserLeaveHint() { super.onUserLeaveHint(); finishAffinity() }
     override fun onRestart() { super.onRestart(); if (gamePresentation == null) launchWhiteScreen() }
+    // V6.5: 后台暂停 KataGo 搜索释放GPU
+    override fun onPause() {
+        super.onPause()
+        GameState.kataGoEngine?.stopSearch()
+    }
+    override fun onResume() {
+        super.onResume()
+        GameState.kataGoEngine?.stopSearch()  // 恢复时也确保搜索已停止
+    }
     override fun onDestroy() {
         if (::goView.isInitialized) { stopRemindTimers(); animator?.cancel() }
         SoundFX.release()

@@ -279,6 +279,45 @@ class KataGoEngine(private val context: Context) {
     }
     fun setKomi(komi: Float) { gtp("komi $komi") }
 
+    /** V6.3: kata-analyze 分析结果 */
+    data class AnalysisItem(
+        val row: Int, val col: Int,
+        val visits: Int, val winrate: Float, val scoreLead: Float
+    )
+
+    /** V6.8: kata-analyze (1s分析, 4s超时, 去重) */
+    fun analyze(color: String, maxTime: Float = 1f, maxMoves: Int = 3): List<AnalysisItem> {
+        if (!isReady) return emptyList()
+        val resp = gtp("kata-analyze $color $maxTime", (maxTime * 1000 + 3000).toLong())
+        val results = mutableListOf<AnalysisItem>()
+        val seenMoves = mutableSetOf<String>()  // V6.8: 去重
+        for (line in resp.lines()) {
+            if (!line.startsWith("info")) continue
+            val parts = line.substring(5).trim().split(" ")
+            var move = ""; var visits = 0; var wr = 0.5f; var sl = 0f
+            var i = 0
+            while (i < parts.size) {
+                when (parts[i]) {
+                    "move" -> { if (i+1 < parts.size) move = parts[++i] }
+                    "visits" -> { if (i+1 < parts.size) visits = parts[++i].toIntOrNull() ?: 0 }
+                    "winrate" -> { if (i+1 < parts.size) wr = parts[++i].toFloatOrNull() ?: 0.5f }
+                    "scoreLead" -> { if (i+1 < parts.size) sl = parts[++i].toFloatOrNull() ?: 0f }
+                }
+                i++
+            }
+            if (move.length >= 2 && move !in seenMoves) {
+                val coord = gtpToCoord(move)
+                if (coord.first in 0 until currentBoardSize && coord.second in 0 until currentBoardSize) {
+                    seenMoves.add(move)
+                    results.add(AnalysisItem(coord.first, coord.second, visits, wr, sl))
+                }
+            }
+            if (results.size >= maxMoves) break
+        }
+        Log.i("KataGo", "analyze $color → ${results.size} unique candidates")
+        return results
+    }
+
     /** V5.0: 预创建默认调优文件(9/13/19路)，跳过自动调优 */
     private fun createDefaultTuningFile(engineDir: File) {
         try {
@@ -325,5 +364,11 @@ WGD=8 MDIMCD=8 NDIMCD=8 MDIMAD=8 NDIMBD=8 KWID=1 VWMD=1 VWND=1 PADA=1 PADB=1
         try { reader?.close() } catch (_: Exception) {}
         try { process?.destroy() } catch (_: Exception) {}
         isReady = false
+    }
+
+    /** V6.5: 停止引擎搜索（释放GPU，不清除棋盘状态） */
+    fun stopSearch() {
+        if (!isReady) return
+        try { gtp("name", 2000) } catch (_: Exception) {}
     }
 }

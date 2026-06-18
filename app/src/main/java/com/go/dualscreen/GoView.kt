@@ -252,6 +252,49 @@ class GoView @JvmOverloads constructor(
             canvas.drawText("?", hx, hy + qPaint.textSize * 0.35f, qPaint)
         }
 
+        // ★ V6.3: KataGo 分析数据可视化（候选点胜率热力图）
+        if (analysisPoints.isNotEmpty() && g.isActive && !g.isGameOver) {
+            for ((idx, ap) in analysisPoints.withIndex()) {
+                if (g.board[ap.row][ap.col] != GoGame.EMPTY) continue
+                val ax = boardOffsetX + ap.col * cellSize
+                val ay = boardOffsetY + ap.row * cellSize
+                val ar = cellSize * 0.30f
+                // 胜率颜色: 绿色(高) → 黄色(中) → 灰色(低)
+                val wr = ap.winrate.coerceIn(0.3f, 0.7f)
+                val t = (wr - 0.3f) / 0.4f  // 0~1
+                val r = ((1-t)*180 + t*0).toInt()
+                val gv = ((1-t)*180 + t*200).toInt()
+                val b = ((1-t)*80 + t*60).toInt()
+                val dotColor = Color.argb(160, r, gv, b)
+                // 半透明圆点
+                if (idx == 0) {
+                    // 最佳点: 外圈金环
+                    canvas.drawCircle(ax, ay, ar + 3f, Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                        color = Color.parseColor("#AAFFD700"); style = Paint.Style.STROKE; strokeWidth = 3f
+                    })
+                }
+                canvas.drawCircle(ax, ay, ar, Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color = dotColor; style = Paint.Style.FILL
+                })
+                // 胜率小字
+                val wrText = "${"%.1f".format(ap.winrate*100)}%"
+                val wrPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color = Color.parseColor("#DD333333"); textSize = cellSize * 0.2f
+                    textAlign = Paint.Align.CENTER
+                }
+                canvas.drawText(wrText, ax, ay + cellSize * 0.16f, wrPaint)
+                // 目数差 (仅最佳点)
+                if (idx == 0) {
+                    val slText = if (ap.scoreLead > 0) "+${"%.1f".format(ap.scoreLead)}" else "${"%.1f".format(ap.scoreLead)}"
+                    val slPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                        color = if (ap.scoreLead >= 0) Color.parseColor("#DD2E7D32") else Color.parseColor("#DDC62828")
+                        textSize = cellSize * 0.18f; textAlign = Paint.Align.CENTER; isFakeBoldText = true
+                    }
+                    canvas.drawText(slText, ax, ay - cellSize * 0.32f, slPaint)
+                }
+            }
+        }
+
         // 鸡蛋飞行阶段
         if (animState == 3 && eggFlyPhase == 0) {
             val ex = eggFlyX; val ey = eggFlyY; val er = 24f
@@ -311,10 +354,12 @@ class GoView @JvmOverloads constructor(
 
     private fun drawPiece(canvas: Canvas, cx: Float, cy: Float, player: Int, isLast: Boolean, alpha: Float, row: Int = -1, col: Int = -1) {
         val r = cellSize * 0.38f  // 棋子略小，避免与提示标记覆盖
-        // 阴影
+        // 阴影: 黑子灰色阴影(#50888888)增强立体感，白子黑色阴影
+        val shadowColor = if (player == GoGame.PLAYER_BLACK)
+            Color.parseColor("#50888888") else Color.parseColor("#50000000")
         canvas.drawCircle(cx + cellSize * 0.03f, cy + cellSize * 0.05f, r,
             Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = Color.parseColor("#50000000"); style = Paint.Style.FILL
+                color = shadowColor; style = Paint.Style.FILL
                 this.alpha = (alpha * 255).toInt()
             })
         val colors: IntArray; val stops: FloatArray
@@ -739,4 +784,10 @@ class GoView @JvmOverloads constructor(
     private var terrHighlight: Set<Pair<Int,Int>> = emptySet()
     fun showTerritory(pts: Set<Pair<Int,Int>>) { terrHighlight = pts; invalidate() }
     fun clearTerritory() { terrHighlight = emptySet() }
+
+    // ★ V6.3: KataGo 分析数据可视化
+    data class AnalysisPoint(val row: Int, val col: Int, val winrate: Float, val visits: Int, val scoreLead: Float)
+    private var analysisPoints: List<AnalysisPoint> = emptyList()
+    fun showAnalysis(pts: List<AnalysisPoint>) { analysisPoints = pts; invalidate() }
+    fun clearAnalysis() { analysisPoints = emptyList() }
 }

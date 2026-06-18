@@ -68,11 +68,11 @@ graph TD
     B --> C{编译时}
     C -->|头文件| D["Khronos OpenCL 头文件 (CL/cl.h)"]
     C -->|链接| E["空壳 libOpenCL.so (只有符号表)"]
-    
+
     B --> F{运行时}
     F -->|复制| G["/vendor/lib64/libOpenCL.so<br/>(Mali 真实驱动)"]
     G -->|LD_LIBRARY_PATH| H["App 私有目录<br/>filesDir/katago/"]
-    
+
     F -->|也需要| I["/vendor/lib64/egl/libGLES_mali.so<br/>(GPU 依赖链)"]
 ```
 
@@ -385,7 +385,7 @@ sequenceDiagram
 
     App->>Engine: engine.init()
     Engine->>FS: 解压 assets/katago/* (二进制/gpt.cfg/模型)
-    
+
     Note over Engine,Device: 检查设备 GPU 驱动
     Engine->>Device: 检查 libOpenCL.so 是否存在
     alt 驱动存在
@@ -394,16 +394,16 @@ sequenceDiagram
     else 驱动不存在
         Engine->>App: 报告错误
     end
-    
+
     Engine->>FS: 创建默认调优文件 (跳过120s自调优)
-    
+
     Note over Engine,Proc: 启动 GTP 进程
     Engine->>Proc: ProcessBuilder 启动 katago gtp
     Engine->>Proc: 设置 LD_LIBRARY_PATH=filesDir/katago/
-    
+
     Proc->>FS: dlopen("libOpenCL.so")  ← 加载真实 GPU 驱动
     Proc->>Device: OpenCL: Mali-G52 GPU 就绪
-    
+
     Proc-->>Engine: stdout: "GTP ready"
     Engine->>App: onReady(true, "Mali-G52")
 ```
@@ -479,7 +479,7 @@ WGD=8 MDIMCD=8 NDIMCD=8 MDIMAD=8 NDIMBD=8 KWID=1 VWMD=1 VWND=1 PADA=1 PADB=1
 
     val possibleGPUs = listOf("MaliG52r1p0", "MaliG52", "MaliG51", "Adreno", "Mali")
     val boardSizes = listOf(9, 13, 19)
-    
+
     for (gpuName in possibleGPUs) {
         for (bs in boardSizes) {
             val fileName = "tune11_gpu${gpuName}_x${bs}_y${bs}_c384_mv14.txt"

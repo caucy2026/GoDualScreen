@@ -165,7 +165,7 @@ class GamePresentation : Activity() {
         autoRow.addView(autoSwGP)
         leftPanel.addView(autoRow, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = 4 })
 
-        // ★ V8.3: 让子系统 (白方让黑方弱方, 2-9子, 左右滑动)
+        // ★ V8.5: 让子系统 (白方让黑方弱方, 2-9子, 左右滑动)
         // 注意: 滑动条和数值View必须在 Switch 之前声明, 因为 Switch 监听器引用它们
         val handiValText = TextView(this).apply {
             text = "2"; textSize = 11f; setTextColor(Color.parseColor("#6D4C41"))
@@ -218,7 +218,7 @@ class GamePresentation : Activity() {
         leftPanel.addView(handiSeekRow, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = 4 })
 
         val verLabel = TextView(this).apply {
-            text = "KataGo围棋双屏\nV8.3"; textSize = 9f
+            text = "KataGo围棋双屏\nV8.5"; textSize = 9f
             setTextColor(Color.parseColor("#998B7388")); gravity = Gravity.CENTER
             setPadding(2, 8, 2, 2)
         }
@@ -481,7 +481,7 @@ class GamePresentation : Activity() {
         setPadding(24, 14, 24, 14); setOnClickListener { onClick() }
     }
 
-    fun showExitRequestDialog(callback: (Boolean) -> Unit) {
+    fun showExitRequestDialog(requesterName: String, callback: (Boolean) -> Unit) {
         val container = findViewById<FrameLayout>(android.R.id.content) ?: return
         val overlay = FrameLayout(this).apply { setBackgroundColor(Color.parseColor("#80000000")); setOnClickListener { } }
         val card = LinearLayout(this).apply {
@@ -495,7 +495,7 @@ class GamePresentation : Activity() {
             gravity = Gravity.CENTER; setPadding(0, 0, 0, 16)
         })
         card.addView(TextView(this).apply {
-            text = "\u9ED1\u65B9\u8BF7\u6C42\u9000\u51FA\u6E38\u620F\uFF0C\u662F\u5426\u540C\u610F\uFF1F"; textSize = 16f
+            text = "${requesterName}\u8BF7\u6C42\u9000\u51FA\u6E38\u620F\uFF0C\u662F\u5426\u540C\u610F\uFF1F"; textSize = 16f
             setTextColor(Color.DKGRAY); gravity = Gravity.CENTER; setPadding(0, 0, 0, 24)
         })
         val btnRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER }
@@ -515,17 +515,30 @@ class GamePresentation : Activity() {
         }
     }
 
-    // 返回键 + Home 键
+    // V8.5: 返回键需对方确认后才能退出
     override fun onBackPressed() {
-        getMainActivity?.invoke()?.finishAffinity()
-        instance = null
-        finishAffinity()
+        if (game.isActive && !game.isGameOver) {
+            getMainActivity?.invoke()?.showExitRequestDialog(game.getPlayerName(playerPerspective)) { a ->
+                if (a) { getMainActivity?.invoke()?.exitApp() }
+                else runOnUiThread { getMainActivity?.invoke()?.showMsgToPlayer(playerPerspective, "\u5BF9\u65B9\u62D2\u7EDD\u9000\u51FA") }
+            }
+        } else {
+            getMainActivity?.invoke()?.finishAffinity()
+            instance = null
+            finishAffinity()
+        }
     }
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
-        getMainActivity?.invoke()?.finishAffinity()
-        instance = null
-        finishAffinity()
+        if (game.isActive && !game.isGameOver) {
+            getMainActivity?.invoke()?.showExitRequestDialog(game.getPlayerName(playerPerspective)) { a ->
+                if (a) { getMainActivity?.invoke()?.exitApp() }
+            }
+        } else {
+            getMainActivity?.invoke()?.finishAffinity()
+            instance = null
+            finishAffinity()
+        }
     }
 
     override fun onDestroy() {

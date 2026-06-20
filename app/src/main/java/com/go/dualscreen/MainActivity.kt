@@ -296,7 +296,7 @@ class MainActivity : AppCompatActivity() {
 
         // 版本信息（左下角）
         val verLabel = TextView(this).apply {
-            text = "KataGo围棋双屏\nV8.3"; textSize = 9f
+            text = "KataGo围棋双屏\nV8.5"; textSize = 9f
             setTextColor(Color.parseColor("#998B7388")); gravity = Gravity.CENTER
             setPadding(2, 8, 2, 2)
         }
@@ -566,7 +566,7 @@ class MainActivity : AppCompatActivity() {
         updateButtonState(); updateStatusDisplay(); updateCapturesDisplay()
         gamePresentation?.updateButtonState(); startRemindTimers()
         resetKataGoBoard()
-        // V8.3: 让子后白方先行，提示音对应
+        // V8.5: 让子后白方先行，提示音对应
         val voiceRes = if (game.currentPlayer == GoGame.PLAYER_BLACK) R.raw.your_turn_black else R.raw.your_turn_white
         SoundFX.playVoice(this, voiceRes)
     }
@@ -601,7 +601,8 @@ class MainActivity : AppCompatActivity() {
         updateButtonState(); updateStatusDisplay(); updateCapturesDisplay()
         gamePresentation?.updateButtonState(); startRemindTimers()
         resetKataGoBoard()  // ★ 重置 KataGo 棋盘
-        SoundFX.playVoice(this, R.raw.your_turn_black)
+        val voiceRes = if (game.currentPlayer == GoGame.PLAYER_BLACK) R.raw.your_turn_black else R.raw.your_turn_white
+        SoundFX.playVoice(this, voiceRes)
     }
     fun showRestartRequestDialog(requesterName: String, callback: (Boolean) -> Unit) {
         AlertDialog.Builder(this).setTitle("\u91CD\u65B0\u5F00\u59CB\u8BF7\u6C42")
@@ -617,6 +618,14 @@ class MainActivity : AppCompatActivity() {
             .setNegativeButton("\u4E0D\u540C\u610F") { _, _ -> callback(false) }
             .setCancelable(false).show()
     }
+    // V8.5: 白方请求退出时，黑方确认对话框
+    fun showExitRequestDialog(requesterName: String, callback: (Boolean) -> Unit) {
+        AlertDialog.Builder(this).setTitle("\u9000\u51FA\u6E38\u620F\u8BF7\u6C42")
+            .setMessage("${requesterName}\u8BF7\u6C42\u9000\u51FA\u6E38\u620F\uFF0C\u662F\u5426\u540C\u610F\uFF1F")
+            .setPositiveButton("\u540C\u610F") { _, _ -> callback(true) }
+            .setNegativeButton("\u4E0D\u540C\u610F") { _, _ -> callback(false) }
+            .setCancelable(false).show()
+    }
     private fun shakeMainScreen() {
         val v = goView
         ValueAnimator.ofFloat(0f, 16f, -16f, 12f, -12f, 10f, -10f, 8f, -8f, 5f, -5f, 3f, -3f, 0f).apply {
@@ -625,13 +634,13 @@ class MainActivity : AppCompatActivity() {
     }
     private fun requestExit() {
         if (game.isActive && !game.isGameOver) {
-            gamePresentation?.showExitRequestDialog { a ->
+            gamePresentation?.showExitRequestDialog(game.getPlayerName(myPlayer)) { a ->
                 if (a) runOnUiThread { exitApp() }
                 else runOnUiThread { showMsgToPlayer(myPlayer, "\u5BF9\u65B9\u62D2\u7EDD\u9000\u51FA") }
             }
         } else { exitApp() }
     }
-    private fun exitApp() {
+    internal fun exitApp() {
         stopRemindTimers(); animator?.cancel(); animator = null
         countdownRunnable?.let { handler.removeCallbacks(it) }; countdownRunnable = null
         goView.clearAllAnimations()
@@ -647,6 +656,8 @@ class MainActivity : AppCompatActivity() {
         if (!game.isActive || game.isGameOver) { showMsg("\u65E0\u6CD5\u6094\u68CB"); return }
         if (game.isPaused) { showMsgToPlayer(player, "\u6E38\u620F\u6682\u505C\u4E2D\uFF0C\u65E0\u6CD5\u6094\u68CB"); return }
         if (!game.canUndo(player)) { showMsg("\u4F60\u8FD8\u6CA1\u6709\u843D\u5B50"); return }
+        // V8.5: AI自动时直接悔棋，无需对方确认
+        if (player == GoGame.PLAYER_BLACK && autoPlayWhite) { doUndo(player); return }
         val oppScreen = if (player == GoGame.PLAYER_BLACK) gamePresentation else null
         val cb: (Boolean) -> Unit = { a ->
             if (a) doUndo(player)
@@ -695,7 +706,7 @@ class MainActivity : AppCompatActivity() {
         }, 2200)
     }
     private fun showMsg(m: String) { showPopupMessage(m); gamePresentation?.showPopupMessage(m) }
-    private fun showMsgToPlayer(player: Int, m: String) {
+    internal fun showMsgToPlayer(player: Int, m: String) {
         if (player == myPlayer) showPopupMessage(m) else gamePresentation?.showPopupMessage(m)
     }
 
@@ -914,8 +925,9 @@ class MainActivity : AppCompatActivity() {
 
     private fun handleScoring() {
         if (!game.isActive || game.isGameOver) return
-        // V8.0: 不足160手不能数子
-        if (game.totalMoves < 160) { showMsgToPlayer(myPlayer, "\u81F3\u5C11160\u624B\u540E\u624D\u80FD\u6570\u5B50"); return }
+        // V8.5: 根据棋盘大小限制最低手数
+        val minMoves = when (game.boardSize) { 9 -> 40; 13 -> 80; else -> 160 }
+        if (game.totalMoves < minMoves) { showMsgToPlayer(myPlayer, "\u81F3\u5C11${minMoves}\u624B\u540E\u624D\u80FD\u6570\u5B50"); return }
         game.calculateTerritoryTemp()
         val bTotal = game.blackTerritory + game.capturedByBlack
         val wTotal = game.whiteTerritory + game.capturedByWhite + GoGame.KOMI
@@ -1260,8 +1272,8 @@ class MainActivity : AppCompatActivity() {
         root.addView(overlay, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
     }
 
-    // 返回键 + Home 键退出
-    override fun onBackPressed() { finishAffinity() }
+    // V8.5: 返回键需对方确认后才能退出
+    override fun onBackPressed() { requestExit() }
     override fun onUserLeaveHint() { super.onUserLeaveHint(); finishAffinity() }
     override fun onRestart() { super.onRestart(); if (gamePresentation == null) launchWhiteScreen() }
     // V6.5: 后台暂停 KataGo 搜索释放GPU

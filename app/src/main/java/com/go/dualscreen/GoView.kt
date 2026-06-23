@@ -23,6 +23,7 @@ class GoView @JvmOverloads constructor(
     var onConfirmPlace: ((row: Int, col: Int) -> Unit)? = null
     var message: String = ""
     @JvmField var autoPlayBlock = false  // 自动落子时阻止手动触摸
+    @JvmField var replayMode = false     // V8.6: 回放模式阻止触摸
 
     // 预览状态
     private var pendingRow = -1
@@ -400,6 +401,7 @@ class GoView @JvmOverloads constructor(
         if (event.action != MotionEvent.ACTION_DOWN) return true
         val g = game ?: return true
         if (autoPlayBlock) { message = "自动落子中，请勿手动操作"; invalidate(); return true }
+        if (replayMode) return true  // V8.6: 回放模式阻止触摸
         if (g.isPaused) { message = "游戏暂停中"; invalidate(); return true }
         if (g.isGameOver) { message = "游戏已结束，请重新开始"; invalidate(); return true }
         if (g.currentPlayer != playerPerspective) { message = "请等待对方落子！"; invalidate(); return true }

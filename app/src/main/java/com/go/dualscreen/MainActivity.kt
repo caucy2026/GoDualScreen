@@ -21,6 +21,7 @@ import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
+import java.io.File
 
 class MainActivity : AppCompatActivity() {
 
@@ -47,6 +48,21 @@ class MainActivity : AppCompatActivity() {
     // ★ V4.4: KataGo 启动计时器
     private var kataGoStartMs = 0L
     private var kataGoTimerRunnable: Runnable? = null
+    // V8.6: 录像功能
+    private var recordingEnabled = false
+    @JvmField var isReplaying = false
+    private var replayData: RecordingData? = null
+    private var replayIndex = 0
+    private var replayPlaying = false
+    private val replayHandler = Handler(Looper.getMainLooper())
+    private var replayRunnable: Runnable? = null
+    private var replayProgressBar: SeekBar? = null
+    private var replayPlayBtn: Button? = null
+    private var replayExitBtn: Button? = null
+    private var replayMoveText: TextView? = null  // V8.7: 步数显示
+    private var replayOrigBoardSize = 13  // V9.2: 回放前原始棋盘大小
+    // V8.8: 回放时禁用的按钮列表
+    private val replaySensitiveViews = mutableListOf<View>()
 
     fun setAutoPlayWhite(on: Boolean) { autoPlayWhite = on }
     fun triggerAutoPlayIfMyTurn() {
@@ -92,12 +108,16 @@ class MainActivity : AppCompatActivity() {
         }
         // V6.1: KataGo开关状态（默认开启）
         kataGoEnabled = prefs.getBoolean("katago_enabled", true)
+        // V8.6: 录像开关状态
+        recordingEnabled = prefs.getBoolean("recording_enabled", false)
         initMainUI()
         goView.showPieceOrder = prefs.getBoolean("piece_order", false)
         launchWhiteScreen()
 
         // ★ V6.1: 初始化 KataGo 引擎（后台加载模型，不阻塞 UI）
         if (kataGoEnabled) startKataGoEngine()
+        // V8.9: 确保初始化阶段没有残留计时器
+        stopRemindTimers()
     }
 
     override fun onConfigurationChanged(newConfig: Configuration) {
@@ -186,6 +206,7 @@ class MainActivity : AppCompatActivity() {
         // 催促按钮
         val hurryBtn = create3DButton("\u23F0\n\u50AC", "#FF9800", "#E65100", smallSize)
         hurryBtn.setOnClickListener {
+            if (isReplaying) return@setOnClickListener  // V8.6
             if (!game.isActive || game.isGameOver) { showMsgToPlayer(myPlayer, "\u6E38\u620F\u672A\u5F00\u59CB"); return@setOnClickListener }
             if (game.isPaused && game.pausedByPlayer != myPlayer) { showMsgToPlayer(myPlayer, "\u6E38\u620F\u6682\u505C\u4E2D\uFF0C\u8BF7\u7B49\u5F85\u5BF9\u65B9\u6062\u590D"); return@setOnClickListener }
             if (game.currentPlayer == myPlayer) { showMsgToPlayer(myPlayer, "\u8F6E\u5230\u4F60\u4E86\uFF0C\u4E0D\u80FD\u50AC\u81EA\u5DF1"); return@setOnClickListener }
@@ -198,6 +219,7 @@ class MainActivity : AppCompatActivity() {
         // Pass 虚手按钮
         val passBtn = create3DButton("\u270B\n\u865A\u624B", "#A08060", "#806040", smallSize)
         passBtn.setOnClickListener {
+            if (isReplaying) return@setOnClickListener  // V8.6
             if (!game.isActive || game.isGameOver) { showMsgToPlayer(myPlayer, "\u6E38\u620F\u672A\u5F00\u59CB"); return@setOnClickListener }
             if (game.isPaused) { showMsgToPlayer(myPlayer, "\u6E38\u620F\u6682\u505C\u4E2D\uFF0C\u8BF7\u5148\u6062\u590D"); return@setOnClickListener }
             if (game.currentPlayer != myPlayer) { showMsgToPlayer(myPlayer, "\u8BF7\u7B49\u5F85\u5BF9\u65B9\u64CD\u4F5C"); return@setOnClickListener }
@@ -208,6 +230,7 @@ class MainActivity : AppCompatActivity() {
         // 提示按钮（黑方在虚手下方）
         val hintBtn = create3DButton("\uD83D\uDCA1\nAI\u63D0\u793A", "#607888", "#405868", smallSize)
         hintBtn.setOnClickListener {
+            if (isReplaying) return@setOnClickListener  // V8.6
             if (!game.isActive || game.isGameOver) { showMsgToPlayer(myPlayer, "\u6E38\u620F\u672A\u5F00\u59CB"); return@setOnClickListener }
             if (game.isPaused) { showMsgToPlayer(myPlayer, "\u6E38\u620F\u6682\u505C\u4E2D"); return@setOnClickListener }
             if (autoPlayEnabled) { showMsgToPlayer(myPlayer, "\uD83E\uDD16 AI\u81EA\u52A8\u4E2D\uFF0C\u65E0\u9700\u63D0\u793A"); return@setOnClickListener }
@@ -219,6 +242,7 @@ class MainActivity : AppCompatActivity() {
         // 数目按钮
         val scoreBtn = create3DButton("\uD83D\uDCCA\n\u6570\u5B50", "#688078", "#486058", smallSize)
         scoreBtn.setOnClickListener {
+            if (isReplaying) return@setOnClickListener  // V8.6
             if (!game.isActive || game.isGameOver) { showMsgToPlayer(myPlayer, "\u6E38\u620F\u672A\u5F00\u59CB"); return@setOnClickListener }
             if (game.isPaused) { showMsgToPlayer(myPlayer, "\u6E38\u620F\u6682\u505C\u4E2D"); return@setOnClickListener }
             handleScoring()
@@ -229,6 +253,7 @@ class MainActivity : AppCompatActivity() {
         pauseBtnBlack = pauseBtn
         var pauseBtnRef: Button? = null; pauseBtnRef = pauseBtn
         pauseBtn.setOnClickListener {
+            if (isReplaying) return@setOnClickListener  // V8.6
             if (!game.isActive || game.isGameOver) { showMsgToPlayer(myPlayer, "\u6E38\u620F\u672A\u5F00\u59CB"); return@setOnClickListener }
             if (game.isPaused) {
                 if (game.pausedByPlayer == myPlayer) {
@@ -294,9 +319,12 @@ class MainActivity : AppCompatActivity() {
         autoRow.addView(autoSw)
         leftPanel.addView(autoRow, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = 4 })
 
+        // V8.8: 注册回放时需禁用的左侧按钮
+        replaySensitiveViews.addAll(listOf(hurryBtn, passBtn, hintBtn, scoreBtn, pauseBtn, autoSw))
+
         // 版本信息（左下角）
         val verLabel = TextView(this).apply {
-            text = "KataGo围棋双屏\nV8.5"; textSize = 9f
+            text = "KataGo围棋双屏\nV9.6"; textSize = 9f
             setTextColor(Color.parseColor("#998B7388")); gravity = Gravity.CENTER
             setPadding(2, 8, 2, 2)
         }
@@ -352,6 +380,7 @@ class MainActivity : AppCompatActivity() {
 
         val exitBtn = createPlaqueButton("\uD83D\uDEAA\n\u9000\u51FA", "#5A3028", "#905850", btnSize)
         exitBtn.setOnClickListener {
+            if (isReplaying) return@setOnClickListener  // V8.6
             if (game.isPaused && game.pausedByPlayer != myPlayer) { showMsgToPlayer(myPlayer, "\u6E38\u620F\u6682\u505C\u4E2D\uFF0C\u8BF7\u7B49\u5F85\u5BF9\u65B9\u6062\u590D"); return@setOnClickListener }
             requestExit()
         }
@@ -366,11 +395,14 @@ class MainActivity : AppCompatActivity() {
                 setColor(Color.parseColor("#CC8D6E63")); setStroke(2, Color.parseColor("#FFD700"))
             }
             setOnClickListener {
+                if (isReplaying) return@setOnClickListener  // V8.6
                 if (game.isPaused && game.pausedByPlayer != myPlayer) { showMsgToPlayer(myPlayer, "\u6E38\u620F\u6682\u505C\u4E2D\uFF0C\u8BF7\u7B49\u5F85\u5BF9\u65B9\u6062\u590D"); return@setOnClickListener }
                 showSettingsDialog()
             }
         }
         panel.addView(settingsBtn, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        // V8.8: 注册回放时需禁用的右侧按钮（退出按钮不禁用）
+        replaySensitiveViews.addAll(listOf(startBtn, undoBtn, settingsBtn))
         val panelLp = if (isLandscape()) LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT) else LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
         root.addView(panel, panelLp)
         setContentView(root)
@@ -491,6 +523,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun onStartOrRestart(player: Int) {
+        if (isReplaying) return  // V8.6: 回放期间禁止操作
         if (game.isPaused) { showMsgToPlayer(player, "\u6E38\u620F\u6682\u505C\u4E2D\uFF0C\u8BF7\u5148\u6062\u590D\u6E38\u620F"); return }
         // ★ V6.1: KataGo 初始化中禁止开始
         if (kataGoEnabled && GameState.kataGoEngine?.isReady != true) {
@@ -519,14 +552,11 @@ class MainActivity : AppCompatActivity() {
         }.start()
     }
 
-    /** 重置 KataGo 棋盘 */
-    /** V5.1: 同步重置 KataGo 棋盘基础设置（快速，3条命令~150ms） */
+    /** 重置 KataGo 棋盘（仅清空+贴目，不动 boardsize） */
     private fun resetKataGoBoard() {
         val kg = GameState.kataGoEngine ?: return
         if (!kg.isReady) return
-        // 同步执行基础设置，确保任何后续操作前棋盘已就绪
         try {
-            kg.setBoardSize(game.boardSize)
             kg.clearBoard()
             kg.setKomi(GoGame.KOMI.toFloat())
         } catch (e: Exception) {
@@ -534,13 +564,12 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** V4.4: 异步回放所有历史落子，不阻塞 UI */
+    /** V9.3: 异步同步让子到 KataGo（不碰 boardsize，只同步棋盘状态） */
     private fun asyncSyncKataGoBoard() {
         val kg = GameState.kataGoEngine ?: return
         if (!kg.isReady) return
         Thread {
             try {
-                kg.setBoardSize(game.boardSize)
                 kg.clearBoard()
                 kg.setKomi(GoGame.KOMI.toFloat())
                 var count = 0
@@ -564,11 +593,19 @@ class MainActivity : AppCompatActivity() {
     private fun onGameStarted() {
         goView.clearPreview(); goView.invalidate(); gamePresentation?.refreshView()
         updateButtonState(); updateStatusDisplay(); updateCapturesDisplay()
-        gamePresentation?.updateButtonState(); startRemindTimers()
+        gamePresentation?.updateButtonState()
+        // V9.3: 先同步 KataGo 棋盘（含让子），再启动计时器
         resetKataGoBoard()
+        if (game.handicapStones >= 2) asyncSyncKataGoBoard()
         // V8.5: 让子后白方先行，提示音对应
         val voiceRes = if (game.currentPlayer == GoGame.PLAYER_BLACK) R.raw.your_turn_black else R.raw.your_turn_white
         SoundFX.playVoice(this, voiceRes)
+        // V8.6: 启动录像
+        if (recordingEnabled) {
+            RecordingManager.startRecording(game.boardSize, game.handicapStones)
+        }
+        // V9.3: 最后启动计时器（确保让子已同步到KataGo）
+        startRemindTimers()
     }
     private fun requestRestart(player: Int) {
         if (player == GoGame.PLAYER_BLACK) {
@@ -599,10 +636,18 @@ class MainActivity : AppCompatActivity() {
         goView.clearPreview(); goView.clearMessage(); goView.invalidate()
         gamePresentation?.clearPreview(); gamePresentation?.clearMessage(); gamePresentation?.refreshView()
         updateButtonState(); updateStatusDisplay(); updateCapturesDisplay()
-        gamePresentation?.updateButtonState(); startRemindTimers()
-        resetKataGoBoard()  // ★ 重置 KataGo 棋盘
+        gamePresentation?.updateButtonState()
+        // V9.3: 先同步 KataGo（含让子），再启动计时器
+        resetKataGoBoard()
+        if (game.handicapStones >= 2) asyncSyncKataGoBoard()
         val voiceRes = if (game.currentPlayer == GoGame.PLAYER_BLACK) R.raw.your_turn_black else R.raw.your_turn_white
         SoundFX.playVoice(this, voiceRes)
+        // V8.6: 重开也启动录像
+        if (recordingEnabled) {
+            RecordingManager.startRecording(game.boardSize, game.handicapStones)
+        }
+        // V9.3: 最后启动计时器
+        startRemindTimers()
     }
     fun showRestartRequestDialog(requesterName: String, callback: (Boolean) -> Unit) {
         AlertDialog.Builder(this).setTitle("\u91CD\u65B0\u5F00\u59CB\u8BF7\u6C42")
@@ -641,6 +686,10 @@ class MainActivity : AppCompatActivity() {
         } else { exitApp() }
     }
     internal fun exitApp() {
+        // V8.9: 仅当对局已开始时保存录像
+        if (recordingEnabled && game.isActive && RecordingManager.currentRecording != null) {
+            RecordingManager.finishRecording(this)
+        }
         stopRemindTimers(); animator?.cancel(); animator = null
         countdownRunnable?.let { handler.removeCallbacks(it) }; countdownRunnable = null
         goView.clearAllAnimations()
@@ -672,6 +721,10 @@ class MainActivity : AppCompatActivity() {
     private fun doUndo(player: Int) {
         val r = game.undo(player)
         if (r.success) {
+            // V9.6: 记录悔棋标记（保留所有历史着法，不删除）
+            if (recordingEnabled && RecordingManager.currentRecording != null) {
+                RecordingManager.recordUndo(player, r.undoCount)
+            }
             SoundFX.playVoice(this, R.raw.taunt_undo)
             goView.clearPreview(); goView.clearMessage(); goView.invalidate()
             gamePresentation?.clearMessage(); gamePresentation?.refreshView()
@@ -711,8 +764,13 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun handlePass(player: Int) {
+        if (isReplaying) return  // V8.6: 回放期间禁止操作
         val r = game.pass(player)
         if (!r.success) { showMsg(r.message); return }
+        // V8.6: 录像记录虚手
+        if (recordingEnabled && RecordingManager.currentRecording != null) {
+            RecordingManager.recordPass(player)
+        }
         SoundFX.playStoneSound()
         goView.clearPreview(); goView.clearHint(); goView.clearTerritory(); goView.clearMessage(); goView.clearAnalysis(); goView.invalidate()
         gamePresentation?.clearMessage(); gamePresentation?.clearHint(); gamePresentation?.clearAnalysis(); gamePresentation?.refreshView()
@@ -727,12 +785,22 @@ class MainActivity : AppCompatActivity() {
                 SoundFX.playVoice(this, R.raw.win_white)
             }
             startAnimationLoop()
+            // V8.6: 对局结束，保存录像
+            if (recordingEnabled) RecordingManager.finishRecording(this)
         } else startRemindTimers()
     }
 
     private fun handlePiecePlaced(row: Int, col: Int, isAutoPlay: Boolean = false) {
+        if (isReplaying) return  // V8.6: 回放期间禁止操作
         val r = game.placePiece(row, col, game.currentPlayer)
         if (!r.success) { showMsg(r.message); return }
+        // V9.1: 录像记录落子（含被提子位置）
+        if (recordingEnabled && RecordingManager.currentRecording != null) {
+            val who = if (game.currentPlayer == GoGame.PLAYER_BLACK) GoGame.PLAYER_WHITE else GoGame.PLAYER_BLACK
+            RecordingManager.recordMove(who, row, col, r.captures, r.capturedStones)
+            if (r.captures > 0) Log.i("GoGame", "  📹 录像: ${if(who==GoGame.PLAYER_BLACK)"B" else "W"}提${r.captures}子 ${r.capturedStones}")
+            else Log.i("GoGame", "  📹 录像: ${if(who==GoGame.PLAYER_BLACK)"B" else "W"}落子($row,$col)")
+        }
         // ★ V5.2: genMove 已自动落子，自动落子不重复通知 KataGo
         if (!isAutoPlay) {
             notifyKataGoMove(row, col, if (game.currentPlayer == GoGame.PLAYER_BLACK) GoGame.PLAYER_WHITE else GoGame.PLAYER_BLACK)
@@ -753,6 +821,8 @@ class MainActivity : AppCompatActivity() {
                 SoundFX.playVoice(this, R.raw.win_white)
             }
             startAnimationLoop()
+            // V8.6: 对局结束，保存录像
+            if (recordingEnabled) RecordingManager.finishRecording(this)
         } else startRemindTimers()
     }
 
@@ -848,7 +918,9 @@ class MainActivity : AppCompatActivity() {
     /** 后台 AI 计算（防 ANR + 超时保护 + V4.8 统一未就绪提示） */
     private var aiThinking = false
     private var aiTimeoutRunnable: Runnable? = null
+    private var aiComputeDone = false  // V8.5: 防止超时/线程双重回调
     private fun computeAiAsync(player: Int, onDone: (Triple<Int,Int,String>?) -> Unit) {
+        if (isReplaying) return  // V8.6: 回放期间禁止 AI
         if (aiThinking) return
         // ★ V6.1: KataGo 已关闭
         if (!kataGoEnabled) {
@@ -866,13 +938,14 @@ class MainActivity : AppCompatActivity() {
             onDone(null)
             return
         }
-        aiThinking = true
+        aiThinking = true; aiComputeDone = false
         val msg = "\uD83E\uDD16 KataGo \u6DF1\u5EA6\u601D\u8003\u4E2D..."
         if (player == myPlayer) { goView.message = msg; goView.invalidate() }
         else gamePresentation?.showMessage(msg)
         // ★ V4.4: 10 秒超时保护，防止死锁
         aiTimeoutRunnable = Runnable {
-            aiThinking = false
+            if (aiComputeDone) return@Runnable
+            aiComputeDone = true; aiThinking = false
             Log.w("KataGo", "AI thinking timeout! Resetting aiThinking flag")
             handler.post {
                 if (player == myPlayer) { goView.message = "⚠️ AI 超时，请重试"; goView.invalidate() }
@@ -880,10 +953,12 @@ class MainActivity : AppCompatActivity() {
                 onDone(null)
             }
         }
-        handler.postDelayed(aiTimeoutRunnable!!, 10000)
+        handler.postDelayed(aiTimeoutRunnable!!, 30000)  // V9.3: 30s（boardsize 加载可能10s+genmove3s）
         Thread {
             val result = try { game.suggestMove(player) } catch (_: Exception) { null }
             handler.post {
+                if (aiComputeDone) return@post
+                aiComputeDone = true
                 aiTimeoutRunnable?.let { handler.removeCallbacks(it) }
                 aiTimeoutRunnable = null
                 aiThinking = false
@@ -894,6 +969,7 @@ class MainActivity : AppCompatActivity() {
 
     /** V6.5: 统一使用 kata-analyze 深度分析 */
     private fun handleHint() {
+        if (isReplaying) return  // V8.6: 回放期间禁止操作
         if (aiThinking) { showMsgToPlayer(myPlayer, "🤖 正在思考中，请稍候..."); return }
         if (!kataGoEnabled) { showMsgToPlayer(myPlayer, "⚠️ 请先在设置中开启 KataGo"); return }
         if (GameState.kataGoEngine?.isReady != true) {
@@ -918,12 +994,18 @@ class MainActivity : AppCompatActivity() {
                     gamePresentation?.showMessage(reason)
                 }
             } else {
+                // V9.3: AI 虚手/认输时给双方提示
+                val whoName = if (player == GoGame.PLAYER_BLACK) "黑" else "白"
+                val passMsg = "\uD83E\uDD16 AI\uFF08${whoName}\u65B9\uFF09\u865A\u624B"
+                goView.message = passMsg; goView.invalidate()
+                gamePresentation?.showMessage(passMsg)
                 handlePass(player)
             }
         }
     }
 
     private fun handleScoring() {
+        if (isReplaying) return  // V8.6: 回放期间禁止操作
         if (!game.isActive || game.isGameOver) return
         // V8.5: 根据棋盘大小限制最低手数
         val minMoves = when (game.boardSize) { 9 -> 40; 13 -> 80; else -> 160 }
@@ -1259,6 +1341,66 @@ class MainActivity : AppCompatActivity() {
         }
         card.addView(kRow)
 
+        // V8.6: 保存录像开关
+        val recRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER; setPadding(16, 12, 16, 12) }
+        val recLabel = TextView(this).apply { text = "\uD83C\uDFAC \u4FDD\u5B58\u5F55\u50CF:"; textSize = 15f; setTextColor(Color.parseColor("#4A3728")) }
+        recRow.addView(recLabel, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { gravity = Gravity.CENTER_VERTICAL })
+        val recSw = Switch(this).apply { isChecked = recordingEnabled }
+        recRow.addView(recSw)
+        val recTxt = TextView(this).apply {
+            text = if (recordingEnabled) "\u5F00" else "\u5173"
+            textSize = 13f; setTextColor(Color.parseColor("#6D4C41"))
+            gravity = Gravity.CENTER_VERTICAL; setPadding(10, 0, 0, 0)
+        }
+        recRow.addView(recTxt, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { gravity = Gravity.CENTER_VERTICAL })
+        recSw.setOnCheckedChangeListener { _, on ->
+            recordingEnabled = on
+            prefs.edit().putBoolean("recording_enabled", on).apply()
+            recTxt.text = if (on) "\u5F00" else "\u5173"
+            if (on && RecordingManager.currentRecording == null && game.isActive && !game.isGameOver) {
+                RecordingManager.startRecording(game.boardSize, game.handicapStones)
+            } else if (!on) {
+                RecordingManager.cancelRecording()
+            }
+        }
+        card.addView(recRow)
+
+        // V8.6: Load录像按钮
+        val loadBtn = Button(this).apply {
+            text = "\uD83D\uDCC2 Load\u5F55\u50CF"; setTextColor(Color.WHITE); textSize = 14f
+            background = GradientDrawable().apply { shape = GradientDrawable.RECTANGLE; cornerRadius = 12f; setColor(Color.parseColor("#607D8B")) }
+            setPadding(24, 10, 24, 10)
+            isAllCaps = false
+            setOnClickListener {
+                if (game.isActive && !game.isGameOver) {
+                    showPopupMessage("\u8BF7\u5148\u7ED3\u675F\u5F53\u524D\u5BF9\u5C40\u540E\u52A0\u8F7D\u5F55\u50CF")
+                    return@setOnClickListener
+                }
+                if (isReplaying) {
+                    showPopupMessage("\u5F55\u50CF\u64AD\u653E\u4E2D\uFF0C\u8BF7\u5148\u9000\u51FA")
+                    return@setOnClickListener
+                }
+                showLoadRecordingDialog()
+            }
+        }
+        card.addView(loadBtn, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = 8; bottomMargin = 4 })
+
+        // V8.8: 复盘检查按钮
+        val reviewBtn = Button(this).apply {
+            text = "\uD83D\uDD0D \u590D\u76D8\u68C0\u67E5"; setTextColor(Color.WHITE); textSize = 14f
+            background = GradientDrawable().apply { shape = GradientDrawable.RECTANGLE; cornerRadius = 12f; setColor(Color.parseColor("#8D6E63")) }
+            setPadding(24, 10, 24, 10)
+            isAllCaps = false
+            setOnClickListener {
+                if (isReplaying) {
+                    showPopupMessage("\u5F55\u50CF\u64AD\u653E\u4E2D\uFF0C\u8BF7\u5148\u9000\u51FA")
+                    return@setOnClickListener
+                }
+                showValidateRecordingDialog()
+            }
+        }
+        card.addView(reviewBtn, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = 12 })
+
         // 关闭按钮
         val closeBtn = Button(this).apply {
             text = "\u5173\u95ED"; setTextColor(Color.WHITE); textSize = 14f
@@ -1272,8 +1414,400 @@ class MainActivity : AppCompatActivity() {
         root.addView(overlay, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
     }
 
+    // V8.6: 录像回放功能
+    private fun showLoadRecordingDialog() {
+        // V9.1: KataGo 初始化/切换棋盘期间禁止加载录像
+        val kg = GameState.kataGoEngine
+        if (kg != null && (!kg.isReady || kg.boardLoading)) {
+            showPopupMessage("\u23F3 KataGo \u521D\u59CB\u5316\u4E2D\uFF0C\u8BF7\u7A0D\u5019...")
+            return
+        }
+        val files = RecordingManager.listRecordings(this)
+        if (files.isEmpty()) {
+            showPopupMessage("\u6CA1\u6709\u4FDD\u5B58\u7684\u5F55\u50CF")
+            return
+        }
+        val names = files.map { RecordingManager.getDisplayName(it) }.toTypedArray()
+        AlertDialog.Builder(this)
+            .setTitle("\uD83D\uDCC2 \u9009\u62E9\u5F55\u50CF")
+            .setItems(names) { _, which -> (findViewById<ViewGroup>(android.R.id.content)?.getChildAt(0)?.parent as? ViewGroup)?.let { parent ->
+                // 关闭设置对话框
+                for (i in parent.childCount - 1 downTo 0) {
+                    if (parent.getChildAt(i).tag == "settings_dlg") parent.removeViewAt(i)
+                }
+            }; startReplay(files[which]) }
+            // V8.9: 删除全部录像按钮
+            .setNeutralButton("\uD83D\uDDD1 \u5220\u9664\u5168\u90E8") { _, _ ->
+                AlertDialog.Builder(this)
+                    .setTitle("\u786E\u8BA4\u5220\u9664")
+                    .setMessage("\u786E\u5B9A\u5220\u9664\u6240\u6709 ${files.size} \u4E2A\u5F55\u50CF\uFF1F\u6B64\u64CD\u4F5C\u4E0D\u53EF\u64A4\u9500\u3002")
+                    .setPositiveButton("\u5220\u9664") { _, _ ->
+                        for (f in files) RecordingManager.deleteRecording(f)
+                        showPopupMessage("\u5DF2\u5220\u9664 ${files.size} \u4E2A\u5F55\u50CF")
+                    }
+                    .setNegativeButton("\u53D6\u6D88", null)
+                    .show()
+            }
+            .setNegativeButton("\u53D6\u6D88", null)
+            .show()
+    }
+
+    // V8.8: 复盘检查 — 选择录像并验证游戏逻辑
+    private fun showValidateRecordingDialog() {
+        // V9.1: KataGo 初始化/切换棋盘期间禁止复盘检查
+        val kg = GameState.kataGoEngine
+        if (kg != null && (!kg.isReady || kg.boardLoading)) {
+            showPopupMessage("\u23F3 KataGo \u521D\u59CB\u5316\u4E2D\uFF0C\u8BF7\u7A0D\u5019...")
+            return
+        }
+        val files = RecordingManager.listRecordings(this)
+        if (files.isEmpty()) {
+            showPopupMessage("\u6CA1\u6709\u4FDD\u5B58\u7684\u5F55\u50CF")
+            return
+        }
+        val names = files.map { RecordingManager.getDisplayName(it) }.toTypedArray()
+        AlertDialog.Builder(this)
+            .setTitle("\uD83D\uDD0D \u9009\u62E9\u8981\u68C0\u67E5\u7684\u5F55\u50CF")
+            .setItems(names) { _, which -> doValidateRecording(files[which]) }
+            .setNegativeButton("\u53D6\u6D88", null)
+            .show()
+    }
+
+    private fun doValidateRecording(file: File) {
+        val data = RecordingManager.loadRecording(file) ?: run {
+            showPopupMessage("\u5F55\u50CF\u6587\u4EF6\u635F\u574F\uFF0C\u65E0\u6CD5\u52A0\u8F7D")
+            return
+        }
+        goView.message = "\uD83D\uDD0D \u6B63\u5728\u590D\u76D8\u68C0\u67E5..."; goView.invalidate()
+        // 在后台线程执行验证
+        Thread {
+            val issues = RecordingManager.validateRecording(data)
+            runOnUiThread {
+                goView.clearMessage(); goView.invalidate()
+                if (issues.isEmpty()) {
+                    AlertDialog.Builder(this)
+                        .setTitle("\u2705 \u590D\u76D8\u7ED3\u679C")
+                        .setMessage("\u5F55\u50CF\u903B\u8F91\u6B63\u786E\uFF0C\u672A\u53D1\u73B0\u95EE\u9898\u3002\n\u68CB\u76D8: ${data.boardSize}\u00D7${data.boardSize}\n\u603B\u624B\u6570: ${data.moves.size}")
+                        .setPositiveButton("\u786E\u5B9A", null)
+                        .show()
+                } else {
+                    val msg = buildString {
+                        append("\u53D1\u73B0 ${issues.size} \u4E2A\u903B\u8F91\u95EE\u9898:\n\n")
+                        for ((i, issue) in issues.withIndex()) {
+                            append("${i + 1}. $issue\n")
+                        }
+                    }
+                    AlertDialog.Builder(this)
+                        .setTitle("\u26A0\uFE0F \u590D\u76D8\u7ED3\u679C")
+                        .setMessage(msg)
+                        .setPositiveButton("\u786E\u5B9A", null)
+                        .show()
+                }
+            }
+        }.start()
+    }
+
+    private fun startReplay(file: File) {
+        val data = RecordingManager.loadRecording(file) ?: run {
+            showPopupMessage("\u5F55\u50CF\u6587\u4EF6\u635F\u574F\uFF0C\u65E0\u6CD5\u52A0\u8F7D")
+            return
+        }
+        if (data.moves.isEmpty()) {
+            showPopupMessage("\u5F55\u50CF\u4E3A\u7A7A")
+            return
+        }
+        // V9.2: 保存原始棋盘大小，回放结束后恢复
+        replayOrigBoardSize = game.boardSize
+        // 设置棋盘大小（不加载KataGo模型，快速切换）
+        if (data.boardSize != game.boardSize) {
+            game.setBoardSize(data.boardSize)
+            prefs.edit().putInt("board_size", data.boardSize).apply()
+            goView.invalidate(); gamePresentation?.refreshView()
+        }
+        // 开始对局（如果未开始）
+        if (!game.isActive || game.isGameOver) {
+            if (data.handicap > 0) game.setHandicap(data.handicap)
+            game.startGame()
+            // V9.3: 回放期间不操作KataGo（避免boardsize GTP导致卡顿）
+        }
+
+        isReplaying = true
+        replayData = data
+        replayIndex = 0
+        replayPlaying = true
+
+        // 阻止触摸操作
+        goView.replayMode = true
+        gamePresentation?.go?.replayMode = true
+
+        // 禁用所有按钮
+        disableButtonsForReplay()
+
+        // 添加回放控制栏
+        addReplayControls()
+
+        updateStatusDisplay()
+        updateCapturesDisplay()
+        gamePresentation?.updateStatusText()
+
+        // 开始自动播放
+        startReplayAutoPlay()
+    }
+
+    private fun stopReplay() {
+        replayRunnable?.let { replayHandler.removeCallbacks(it) }
+        replayRunnable = null
+        replayPlaying = false
+        isReplaying = false
+        replayData = null
+        replayIndex = 0
+
+        // V8.9: 停止所有计时器，防止回放结束后持续提醒
+        stopRemindTimers()
+
+        // 恢复触摸
+        goView.replayMode = false
+        gamePresentation?.go?.replayMode = false
+
+        // 移除回放控制栏
+        removeReplayControls()
+
+        // 恢复按钮
+        enableButtonsAfterReplay()
+
+        // V8.7: 恢复棋盘到程序刚启动状态
+        game.restart()
+        // V9.3: 回放结束后恢复原始棋盘大小并重新对齐KataGo
+        if (replayOrigBoardSize != game.boardSize) {
+            game.setBoardSize(replayOrigBoardSize)
+            prefs.edit().putInt("board_size", replayOrigBoardSize).apply()
+            goView.invalidate(); gamePresentation?.refreshView()
+            // 重置KataGo到原始棋盘（boardsize GTP可能较慢但仅此一次）
+            val kg = GameState.kataGoEngine
+            if (kg != null && kg.isReady) {
+                goView.message = "\u23F3 \u5207\u6362\u56DE ${replayOrigBoardSize}\u8DEF\u6A21\u578B..."
+                goView.invalidate()
+                kg.loadBoardSize(replayOrigBoardSize,
+                    onProgress = { msg -> runOnUiThread { goView.message = msg; goView.invalidate() } },
+                    onDone = { runOnUiThread { goView.clearMessage(); goView.invalidate() } }
+                )
+            }
+        }
+        goView.clearPreview(); goView.clearHint(); goView.clearTerritory(); goView.clearAnalysis()
+        goView.clearMessage(); goView.invalidate()
+        gamePresentation?.clearHint(); gamePresentation?.clearAnalysis()
+        gamePresentation?.clearMessage(); gamePresentation?.refreshView()
+        updateButtonState(); gamePresentation?.updateButtonState()
+        updateStatusDisplay()
+        updateCapturesDisplay()
+        gamePresentation?.updateStatusText()
+    }
+
+    private fun addReplayControls() {
+        val root = findViewById<ViewGroup>(android.R.id.content) ?: return
+        removeReplayControls()
+
+        val screenW = resources.displayMetrics.widthPixels
+        val barW = (screenW * 0.5).toInt()  // V9.0: 50% 屏宽更紧凑
+
+        val bar = LinearLayout(this).apply {
+            tag = "replay_bar"
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(8, 4, 8, 6)
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE; cornerRadius = 12f
+                setColor(Color.parseColor("#F0EBE0")); setStroke(1, Color.parseColor("#C8B898"))
+            }
+            alpha = 0f; animate().alpha(1f).setDuration(300).start()
+        }
+
+        val totalMoves = replayData?.moves?.size ?: 1
+        replayProgressBar = SeekBar(this).apply {
+            max = totalMoves; progress = 0; setPadding(2, 0, 2, 0)
+            // V9.0: 缩小进度条高度
+            minimumHeight = 8; thumb = null
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(sb: SeekBar?, v: Int, fromUser: Boolean) {
+                    if (fromUser) seekReplayTo(v)
+                }
+                override fun onStartTrackingTouch(sb: SeekBar?) {
+                    replayPlaying = false
+                    replayRunnable?.let { replayHandler.removeCallbacks(it) }
+                }
+                override fun onStopTrackingTouch(sb: SeekBar?) {
+                    replayPlaying = true
+                    startReplayAutoPlay()
+                }
+            })
+        }
+        bar.addView(replayProgressBar, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+
+        replayMoveText = TextView(this).apply {
+            text = "0/$totalMoves"; textSize = 10f
+            setTextColor(Color.parseColor("#5D4037")); gravity = Gravity.CENTER
+            setPadding(4, 0, 4, 0); minWidth = 42
+        }
+        bar.addView(replayMoveText, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+
+        val btnSize = 52  // V9.0: 更小按钮
+        replayPlayBtn = Button(this).apply {
+            text = "\u23F8"; textSize = 16f; setTextColor(Color.WHITE)
+            setPadding(10, 4, 10, 4)
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL; setSize(btnSize, btnSize)
+                setColor(Color.parseColor("#546E7A")); setStroke(2, Color.parseColor("#90A4AE"))
+            }
+            setOnClickListener { toggleReplayPlayPause() }
+        }
+        bar.addView(replayPlayBtn, LinearLayout.LayoutParams(btnSize, btnSize).apply { leftMargin = 6; rightMargin = 4 })
+
+        replayExitBtn = Button(this).apply {
+            text = "\u2715"; textSize = 16f; setTextColor(Color.WHITE)
+            setPadding(10, 4, 10, 4)
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL; setSize(btnSize, btnSize)
+                setColor(Color.parseColor("#C62828")); setStroke(2, Color.parseColor("#EF5350"))
+            }
+            setOnClickListener { stopReplay() }
+        }
+        bar.addView(replayExitBtn, LinearLayout.LayoutParams(btnSize, btnSize).apply { leftMargin = 4 })
+
+        // V9.0: 更往下移，不遮挡棋盘
+        val params = FrameLayout.LayoutParams(barW, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+            gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+            bottomMargin = 28
+        }
+        root.addView(bar, params)
+    }
+
+    private fun removeReplayControls() {
+        val root = findViewById<ViewGroup>(android.R.id.content) ?: return
+        for (i in root.childCount - 1 downTo 0) {
+            if (root.getChildAt(i).tag == "replay_bar") root.removeViewAt(i)
+        }
+    }
+
+    private fun startReplayAutoPlay() {
+        replayRunnable?.let { replayHandler.removeCallbacks(it) }
+        replayRunnable = object : Runnable {
+            override fun run() {
+                if (!isReplaying || !replayPlaying) return
+                replayStep()
+                if (replayIndex < (replayData?.moves?.size ?: 0)) {
+                    replayHandler.postDelayed(this, 800)  // 每步800ms
+                } else {
+                    replayPlaying = false
+                    replayPlayBtn?.text = "\u25B6"
+                }
+            }
+        }
+        replayHandler.postDelayed(replayRunnable!!, 500)
+    }
+
+    private fun replayStep() {
+        val data = replayData ?: return
+        if (replayIndex >= data.moves.size) return
+        val move = data.moves[replayIndex]
+        // V9.6: 悔棋标记 → 实际执行回滚
+        if (move.isUndo) {
+            game.undo(move.player)
+            goView.invalidate(); gamePresentation?.refreshView()
+            replayIndex++
+            replayProgressBar?.progress = replayIndex
+            replayMoveText?.text = "${replayIndex}/${data.moves.size}"
+            updateStatusDisplay(); updateCapturesDisplay(); gamePresentation?.updateStatusText()
+            return
+        }
+        if (move.row >= 0) {
+            val r = game.placePiece(move.row, move.col, move.player)
+            // V9.0: 回放也播放落子音效
+            if (r.captures > 0) SoundFX.playCaptureSound() else SoundFX.playStoneSound()
+            goView.clearPreview(); goView.clearHint(); goView.clearTerritory(); goView.clearAnalysis(); goView.invalidate()
+            gamePresentation?.clearHint(); gamePresentation?.clearAnalysis(); gamePresentation?.refreshView()
+        } else {
+            game.pass(move.player)
+            SoundFX.playStoneSound()  // V9.0: 虚手也有音效
+        }
+        replayIndex++
+        replayProgressBar?.progress = replayIndex
+        // V8.7: 更新步数文本
+        replayMoveText?.text = "${replayIndex}/${data.moves.size}"
+        updateStatusDisplay()
+        updateCapturesDisplay()
+        gamePresentation?.updateStatusText()
+        if (replayIndex >= data.moves.size) {
+            replayPlaying = false
+            replayPlayBtn?.text = "\u25B6"
+            // V8.7: 播放完后1.5秒自动恢复到初始状态
+            replayHandler.postDelayed({ stopReplay() }, 1500)
+        }
+    }
+
+    private fun seekReplayTo(targetIndex: Int) {
+        val data = replayData ?: return
+        if (targetIndex < 0 || targetIndex > data.moves.size) return
+        // 重新开始对局并快进到目标位置
+        if (data.handicap > 0) game.setHandicap(data.handicap)
+        game.startGame()
+        replayIndex = 0
+        for (i in 0 until targetIndex) {
+            val move = data.moves[i]
+            if (move.isUndo) {
+                // V9.6: 悔棋标记 → 回滚
+                game.undo(move.player)
+            } else if (move.row >= 0) {
+                game.placePiece(move.row, move.col, move.player)
+            } else {
+                game.pass(move.player)
+            }
+            replayIndex++
+        }
+        replayProgressBar?.progress = replayIndex
+        goView.clearPreview(); goView.clearHint(); goView.clearTerritory(); goView.clearAnalysis(); goView.invalidate()
+        gamePresentation?.clearHint(); gamePresentation?.clearAnalysis(); gamePresentation?.refreshView()
+        updateStatusDisplay()
+        updateCapturesDisplay()
+        gamePresentation?.updateStatusText()
+    }
+
+    private fun toggleReplayPlayPause() {
+        if (!isReplaying) return
+        replayPlaying = !replayPlaying
+        if (replayPlaying) {
+            replayPlayBtn?.text = "\u23F8"
+            startReplayAutoPlay()
+        } else {
+            replayPlayBtn?.text = "\u25B6"
+            replayRunnable?.let { replayHandler.removeCallbacks(it) }
+        }
+    }
+
+    private fun disableButtonsForReplay() {
+        // V8.8: 回放期间禁用所有操作按钮（仅回放退出按钮可用）
+        for (v in replaySensitiveViews) {
+            v.isEnabled = false
+            v.alpha = 0.4f
+        }
+        // V9.1: 副屏也禁用
+        gamePresentation?.disableButtonsForReplay()
+    }
+
+    private fun enableButtonsAfterReplay() {
+        // V8.8: 恢复所有按钮
+        for (v in replaySensitiveViews) {
+            v.isEnabled = true
+            v.alpha = 1.0f
+        }
+        // V9.1: 副屏恢复
+        gamePresentation?.enableButtonsAfterReplay()
+    }
+
     // V8.5: 返回键需对方确认后才能退出
-    override fun onBackPressed() { requestExit() }
+    override fun onBackPressed() {
+        if (isReplaying) { stopReplay(); return }  // V8.6: 回放期间返回=停止回放
+        requestExit()
+    }
     override fun onUserLeaveHint() { super.onUserLeaveHint(); finishAffinity() }
     override fun onRestart() { super.onRestart(); if (gamePresentation == null) launchWhiteScreen() }
     // V6.5: 后台暂停 KataGo 搜索释放GPU
@@ -1286,6 +1820,10 @@ class MainActivity : AppCompatActivity() {
         GameState.kataGoEngine?.stopSearch()  // 恢复时也确保搜索已停止
     }
     override fun onDestroy() {
+        // V8.9: 仅当对局已开始时保存录像（兜底）
+        if (recordingEnabled && game.isActive && RecordingManager.currentRecording != null) {
+            RecordingManager.finishRecording(this)
+        }
         if (::goView.isInitialized) { stopRemindTimers(); animator?.cancel() }
         SoundFX.release()
         BgMusic.stop()

@@ -42,6 +42,10 @@ class GamePresentation : Activity() {
     var getMainActivity: (() -> MainActivity)? = null
     private var startBtn: Button? = null
     private var pauseBtnWhite: Button? = null
+    private var handiSwRef: Switch? = null  // V9.6: 棋盘切换时重置让子开关
+    // V9.1: 回放时禁用的按钮列表
+    private val replaySensitiveViews = mutableListOf<View>()
+    @JvmField var undoBtnRef: Button? = null
 
     private fun isLandscape() = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
 
@@ -77,6 +81,7 @@ class GamePresentation : Activity() {
         // 催促按钮
         val hurryBtn = create3DButton("\u23F0\n\u50AC", "#FF9800", "#E65100", smallSize)
         hurryBtn.setOnClickListener {
+            if (getMainActivity?.invoke()?.isReplaying == true) return@setOnClickListener  // V8.6
             if (!game.isActive || game.isGameOver) { showPopupMessage("\u6E38\u620F\u672A\u5F00\u59CB"); return@setOnClickListener }
             if (game.isPaused && game.pausedByPlayer != playerPerspective) { showPopupMessage("\u6E38\u620F\u6682\u505C\u4E2D\uFF0C\u8BF7\u7B49\u5F85\u5BF9\u65B9\u6062\u590D"); return@setOnClickListener }
             if (game.currentPlayer == playerPerspective) { showPopupMessage("\u8F6E\u5230\u4F60\u4E86\uFF0C\u4E0D\u80FD\u50AC\u81EA\u5DF1"); return@setOnClickListener }
@@ -89,6 +94,7 @@ class GamePresentation : Activity() {
         // Pass 虚手按钮
         val passBtn = create3DButton("\u270B\n\u865A\u624B", "#A08060", "#806040", smallSize)
         passBtn.setOnClickListener {
+            if (getMainActivity?.invoke()?.isReplaying == true) return@setOnClickListener  // V8.6
             if (!game.isActive || game.isGameOver) { showPopupMessage("\u6E38\u620F\u672A\u5F00\u59CB"); return@setOnClickListener }
             if (game.isPaused) { showPopupMessage("\u6E38\u620F\u6682\u505C\u4E2D\uFF0C\u8BF7\u5148\u6062\u590D"); return@setOnClickListener }
             if (game.currentPlayer != playerPerspective) { showPopupMessage("\u8BF7\u7B49\u5F85\u5BF9\u65B9\u64CD\u4F5C"); return@setOnClickListener }
@@ -99,6 +105,7 @@ class GamePresentation : Activity() {
         // 提示按钮（通过 MainActivity 后台计算，防 ANR）
         val hintBtn = create3DButton("\uD83D\uDCA1\nAI\u63D0\u793A", "#607888", "#405868", smallSize)
         hintBtn.setOnClickListener {
+            if (getMainActivity?.invoke()?.isReplaying == true) return@setOnClickListener  // V8.6
             if (!game.isActive || game.isGameOver) { showPopupMessage("游戏未开始"); return@setOnClickListener }
             if (game.isPaused) { showPopupMessage("游戏暂停中"); return@setOnClickListener }
             if (getMainActivity?.invoke()?.autoPlayWhite == true) { showPopupMessage("🤖 AI自动进行中，无需提示"); return@setOnClickListener }
@@ -116,6 +123,7 @@ class GamePresentation : Activity() {
         val pauseBtn = create3DButton("\u23F8\n\u6682\u505C", "#988878", "#786858", smallSize)
         pauseBtnWhite = pauseBtn
         pauseBtn.setOnClickListener {
+            if (getMainActivity?.invoke()?.isReplaying == true) return@setOnClickListener  // V8.6
             if (!game.isActive || game.isGameOver) { showPopupMessage("\u6E38\u620F\u672A\u5F00\u59CB"); return@setOnClickListener }
             if (game.isPaused) {
                 if (game.pausedByPlayer == playerPerspective) {
@@ -172,7 +180,7 @@ class GamePresentation : Activity() {
             gravity = Gravity.CENTER; visibility = View.GONE; setPadding(6, 0, 6, 0)
         }
         val handiSeek = SeekBar(this).apply {
-            max = 7; progress = 0; visibility = View.GONE  // 0→2子, 7→9子
+            max = 7; progress = 0; visibility = View.GONE  // 动态调整: 9路max=3, 13/19路max=7
         }
         handiSeek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(sb: SeekBar?, v: Int, fromUser: Boolean) {
@@ -194,11 +202,16 @@ class GamePresentation : Activity() {
         }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { rightMargin = 4 })
         val handiSw = Switch(this).apply {
             isChecked = false
+            handiSwRef = this  // V9.6
             setOnCheckedChangeListener { _, on ->
                 if (game.isActive) { showPopupMessage("\u8BF7\u5148\u7ED3\u675F\u5F53\u524D\u5BF9\u5C40"); isChecked = false; return@setOnCheckedChangeListener }
                 handiSeek.visibility = if (on) View.VISIBLE else View.GONE
                 handiValText.visibility = if (on) View.VISIBLE else View.GONE
                 if (on) {
+                    // V9.3: 根据棋盘大小限制让子上限(9路≤4子)
+                    val maxStones = if (game.boardSize == 9) 4 else 9
+                    handiSeek.max = maxStones - 2  // 0→2子
+                    if (handiSeek.progress > handiSeek.max) handiSeek.progress = handiSeek.max
                     val n = handiSeek.progress + 2
                     game.setHandicap(n); handiValText.text = n.toString()
                 } else {
@@ -217,8 +230,11 @@ class GamePresentation : Activity() {
         handiSeekRow.addView(handiValText, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { leftMargin = 4 })
         leftPanel.addView(handiSeekRow, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = 4 })
 
+        // V9.1: 注册回放时需禁用的左侧按钮（所有变量已声明完毕）
+        replaySensitiveViews.addAll(listOf(hurryBtn, passBtn, hintBtn, pauseBtn, autoSwGP, handiSw, handiSeek))
+
         val verLabel = TextView(this).apply {
-            text = "KataGo围棋双屏\nV8.5"; textSize = 9f
+            text = "KataGo围棋双屏\nV9.6"; textSize = 9f
             setTextColor(Color.parseColor("#998B7388")); gravity = Gravity.CENTER
             setPadding(2, 8, 2, 2)
         }
@@ -261,11 +277,21 @@ class GamePresentation : Activity() {
         val btnSize = (resources.displayMetrics.density * 100).toInt()
         val btnMargin = if (isLandscape()) 24 else 0; val btnMargin2 = if (isLandscape()) 0 else 16
         startBtn = createPlaqueButton("\u25B6\n\u5F00\u59CB", "#4A6A50", "#6B8E6B", btnSize)
-        startBtn!!.setOnClickListener { onStartOrRestart?.invoke() }
+        startBtn!!.setOnClickListener {
+            if (getMainActivity?.invoke()?.isReplaying == true) return@setOnClickListener  // V8.6
+            onStartOrRestart?.invoke()
+        }
         val undoBtn = createPlaqueButton("\u21A9\n\u6094\u68CB", "#6B5540", "#A89078", btnSize)
-        undoBtn.setOnClickListener { onUndoRequest?.invoke() }
+        undoBtnRef = undoBtn
+        undoBtn.setOnClickListener {
+            if (getMainActivity?.invoke()?.isReplaying == true) return@setOnClickListener  // V8.6
+            onUndoRequest?.invoke()
+        }
         panel.addView(startBtn, LinearLayout.LayoutParams(btnSize, btnSize).apply { bottomMargin = btnMargin; rightMargin = btnMargin2 })
         panel.addView(undoBtn, LinearLayout.LayoutParams(btnSize, btnSize).apply { bottomMargin = 4; rightMargin = btnMargin2 })
+
+        // V9.1: 注册回放时禁用的右侧按钮
+        replaySensitiveViews.addAll(listOf(startBtn!!, undoBtn))
 
         panel.addView(TextView(this).apply {
             text = ""; textSize = 10f; setTextColor(Color.parseColor("#998B7355")); gravity = Gravity.CENTER
@@ -343,8 +369,20 @@ class GamePresentation : Activity() {
     fun setCapturesText(cap: String) { capturesText?.text = cap }
     fun updatePieceOrder(on: Boolean) { goView?.showPieceOrder = on; goView?.invalidate() }
     fun clearAllAnimations() = goView?.clearAllAnimations()
+    // V9.1: 回放时禁用/启用副屏按钮
+    fun setReplayButtonsEnabled(enabled: Boolean) {
+        for (v in replaySensitiveViews) {
+            v.isEnabled = enabled
+            v.alpha = if (enabled) 1.0f else 0.4f
+        }
+    }
     fun startEggAnimation() = goView?.startEggAnimation()
-    fun refreshView() = goView?.invalidate()
+    fun refreshView() {
+        goView?.invalidate()
+        // V9.6: 棋盘切换时关闭让子开关
+        handiSwRef?.isChecked = false
+        game.setHandicap(0)
+    }
     fun clearPreview() = goView?.clearPreview()
     fun showMessage(msg: String) = goView?.showMessage(msg)
     fun clearMessage() = goView?.clearMessage()
@@ -544,5 +582,13 @@ class GamePresentation : Activity() {
     override fun onDestroy() {
         instance = null
         super.onDestroy()
+    }
+
+    // V9.1: 回放时禁用/恢复按钮
+    fun disableButtonsForReplay() {
+        for (v in replaySensitiveViews) { v.isEnabled = false; v.alpha = 0.4f }
+    }
+    fun enableButtonsAfterReplay() {
+        for (v in replaySensitiveViews) { v.isEnabled = true; v.alpha = 1.0f }
     }
 }

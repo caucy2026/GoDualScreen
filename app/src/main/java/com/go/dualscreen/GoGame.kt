@@ -97,6 +97,7 @@ class GoGame(boardSize: Int = 19) {
     fun setBoardSize(size: Int) {
         if (isActive) return
         boardSize = size
+        handicapStones = 0  // V9.6: 切换棋盘格时重置让子
         restart()
     }
 
@@ -185,7 +186,10 @@ class GoGame(boardSize: Int = 19) {
         currentPlayer = opponent
         val nextName = if (currentPlayer == PLAYER_BLACK) "黑方" else "白方"
         val capMsg = if (capCount > 0) "，提${capCount}子" else ""
-        return PlaceResult(true, "轮到${nextName}落子$capMsg", captures = capCount)
+        // V8.5 debug: 每次落子记录棋子序号，方便通过序号定位问题
+        android.util.Log.i("GoGame", "place: ${if (player == PLAYER_BLACK) "B" else "W"} #${pieceOrder[row][col]} at ($row,$col) caps=$capCount next=${if (currentPlayer == PLAYER_BLACK) "B" else "W"}")
+        if (capCount > 0) android.util.Log.i("GoGame", "  captured: ${captured.map { "(${it.first},${it.second})" }}")
+        return PlaceResult(true, "轮到${nextName}落子$capMsg", captures = capCount, capturedStones = captured.toList())
     }
 
     // ==================== Pass ====================
@@ -589,14 +593,35 @@ class GoGame(boardSize: Int = 19) {
     fun suggestMove(player: Int): Triple<Int, Int, String>? {
         if (!isActive || isGameOver) return null
 
-        // ★ V6.5: 仅使用 KataGo 引擎
         val kg = GameState.kataGoEngine
         if (kg != null && kg.isReady) {
+            // V9.3: 等待 loadBoardSize 完成
+            var waited = 0
+            while (kg.boardLoading && waited < 15000) {
+                Thread.sleep(100); waited += 100
+            }
+            // V9.3: 确保让子已同步到 KataGo 再 genmove（解决时序竞态）
+            if (handicapStones >= 2) {
+                try {
+                    kg.setBoardSize(boardSize)
+                    kg.clearBoard()
+                    kg.setKomi(KOMI.toFloat())
+                    for (r in 0 until boardSize) for (c in 0 until boardSize) {
+                        if (board[r][c] != EMPTY) {
+                            val clr = if (board[r][c] == PLAYER_BLACK) "b" else "w"
+                            kg.playMove(clr, r, c)
+                        }
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.e("GoGame", "Pre-genmove sync failed: ${e.message}")
+                }
+            }
             val color = if (player == PLAYER_BLACK) "b" else "w"
             val startMs = System.currentTimeMillis()
             val result = kg.genMove(color)
             if (result != null) {
                 val (row, col, detail) = result
+                // V9.3: 若被让子占位则重试一次（genMove后棋盘已同步）
                 if (row in 0 until boardSize && col in 0 until boardSize && board[row][col] == EMPTY) {
                     val usedMs = System.currentTimeMillis() - startMs
                     val opp = if (player==PLAYER_BLACK) PLAYER_WHITE else PLAYER_BLACK
@@ -741,7 +766,8 @@ data class PlaceResult(
     val message: String,
     val gameOver: Boolean = false,
     val winner: Int = GoGame.EMPTY,
-    val captures: Int = 0
+    val captures: Int = 0,
+    val capturedStones: List<Pair<Int, Int>> = emptyList()  // V9.1: 被提子位置
 )
 
 data class UndoResult(

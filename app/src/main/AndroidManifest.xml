@@ -28,11 +28,12 @@
             </intent-filter>
         </activity>
 
+        <!-- 副屏 Activity — 双屏异显方案 -->
         <activity
             android:name=".GamePresentation"
             android:exported="false"
-            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|smallestScreenSize"
             android:screenOrientation="landscape"
-            android:launchMode="singleInstance" />
+            android:launchMode="singleInstance"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|smallestScreenSize" />
     </application>
 </manifest>

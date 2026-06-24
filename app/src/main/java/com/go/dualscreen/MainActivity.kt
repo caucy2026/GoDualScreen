@@ -324,7 +324,7 @@ class MainActivity : AppCompatActivity() {
 
         // 版本信息（左下角）
         val verLabel = TextView(this).apply {
-            text = "KataGo围棋双屏\nV9.6"; textSize = 9f
+            text = "KataGo围棋双屏\nV10.1"; textSize = 9f
             setTextColor(Color.parseColor("#998B7388")); gravity = Gravity.CENTER
             setPadding(2, 8, 2, 2)
         }
@@ -487,32 +487,62 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // ★ V10.0: 双 Activity 架构 — 反射 setLaunchDisplayId 启动副屏
     private fun launchWhiteScreen() {
-        try { gamePresentation?.finish() } catch (_: Exception) {}
-        gamePresentation = null
         val myDisplayId = display?.displayId ?: 0
+        // V10.0: 强制同步棋盘大小到prefs保存值
+        val savedSize = prefs.getInt("board_size", 13)
+        if (game.boardSize != savedSize) game.setBoardSize(savedSize)
+        android.util.Log.i("GoGame", "launchWhiteScreen: mainBoard=${game.boardSize} savedPref=${savedSize}")
+        GamePresentation.sharedPerspective = GoGame.PLAYER_WHITE
+        GamePresentation.sharedGame = game
+        goView.invalidate()
+
+        // V10.0: 如果副屏Activity已存在且活跃，直接刷新（避免finish+startActivity竞态）
+        val existing = gamePresentation
+        if (existing != null && !existing.isFinishing && !existing.isDestroyed) {
+            android.util.Log.i("GoGame", "launchWhiteScreen: reusing existing Activity, boardSize=${game.boardSize}")
+            existing.onPiecePlaced = { r, c -> runOnUiThread { handlePiecePlaced(r, c) } }
+            existing.onPassRequest = { runOnUiThread { handlePass(GoGame.PLAYER_WHITE) } }
+            existing.onStartOrRestart = { runOnUiThread { onStartOrRestart(GoGame.PLAYER_WHITE) } }
+            existing.onUndoRequest = { runOnUiThread { requestUndo(GoGame.PLAYER_WHITE) } }
+            existing.getMainActivity = { this@MainActivity }
+            existing.refreshView()
+            updateCapturesDisplay()
+            updateStatusDisplay()
+            return
+        }
+
+        // 没有活跃实例 → 启动新的副屏Activity
         for (display in displayManager.displays) {
             if (display.displayId != myDisplayId && display.isValid) {
-                GamePresentation.sharedPerspective = GoGame.PLAYER_WHITE
-                val otherPerspective = GoGame.PLAYER_WHITE
-                GamePresentation.sharedGame = game
+                android.util.Log.i("GoGame", "launchWhiteScreen: starting new Activity on display=${display.displayId}, boardSize=${game.boardSize}")
                 val intent = Intent(this, GamePresentation::class.java)
                 if (android.os.Build.VERSION.SDK_INT >= 26) {
                     try {
                         val options = android.app.ActivityOptions.makeBasic()
-                        val method = options.javaClass.getMethod("setLaunchDisplayId", Int::class.javaPrimitiveType)
+                        val method = options.javaClass.getMethod(
+                            "setLaunchDisplayId",
+                            Int::class.javaPrimitiveType
+                        )
                         method.invoke(options, display.displayId)
                         startActivity(intent, options.toBundle())
-                    } catch (_: Exception) { startActivity(intent) }
-                } else { startActivity(intent) }
+                    } catch (_: Exception) {
+                        startActivity(intent)
+                    }
+                } else {
+                    startActivity(intent)
+                }
+                // 延迟绑定回调（等待副屏 Activity 完全创建）
                 handler.postDelayed({
                     GamePresentation.instance?.let { pres ->
                         pres.onPiecePlaced = { r, c -> runOnUiThread { handlePiecePlaced(r, c) } }
                         pres.onPassRequest = { runOnUiThread { handlePass(GoGame.PLAYER_WHITE) } }
-                        pres.onStartOrRestart = { runOnUiThread { onStartOrRestart(otherPerspective) } }
-                        pres.onUndoRequest = { runOnUiThread { requestUndo(otherPerspective) } }
+                        pres.onStartOrRestart = { runOnUiThread { onStartOrRestart(GoGame.PLAYER_WHITE) } }
+                        pres.onUndoRequest = { runOnUiThread { requestUndo(GoGame.PLAYER_WHITE) } }
                         pres.getMainActivity = { this@MainActivity }
                         gamePresentation = pres
+                        pres.refreshView()
                         updateCapturesDisplay()
                         updateStatusDisplay()
                     }
@@ -520,6 +550,13 @@ class MainActivity : AppCompatActivity() {
                 return
             }
         }
+    }
+
+    internal fun dismissPresentation() {
+        gamePresentation?.let {
+            try { it.finish() } catch (_: Exception) {}
+        }
+        gamePresentation = null
     }
 
     private fun onStartOrRestart(player: Int) {
@@ -685,8 +722,16 @@ class MainActivity : AppCompatActivity() {
             }
         } else { exitApp() }
     }
+    // V10.1: 白方（副屏）请求退出 → 对话框显示在黑方（主屏）
+    internal fun requestExitFromWhite() {
+        if (game.isActive && !game.isGameOver) {
+            showExitRequestDialog(game.getPlayerName(GoGame.PLAYER_WHITE)) { a ->
+                if (a) runOnUiThread { exitApp() }
+                else runOnUiThread { gamePresentation?.showPopupMessage("\u5BF9\u65B9\u62D2\u7EDD\u9000\u51FA") }
+            }
+        } else { exitApp() }
+    }
     internal fun exitApp() {
-        // V8.9: 仅当对局已开始时保存录像
         if (recordingEnabled && game.isActive && RecordingManager.currentRecording != null) {
             RecordingManager.finishRecording(this)
         }
@@ -694,12 +739,12 @@ class MainActivity : AppCompatActivity() {
         countdownRunnable?.let { handler.removeCallbacks(it) }; countdownRunnable = null
         goView.clearAllAnimations()
         try { gamePresentation?.clearAllAnimations() } catch (_: Exception) {}
-        try { gamePresentation?.finish() } catch (_: Exception) {}
-        gamePresentation = null; GamePresentation.instance = null
+        // V10.0: 双Activity架构 — finish副屏Activity再finish主屏
+        dismissPresentation()
         BgMusic.stop()
         GameState.kataGoEngine?.shutdown()
         GameState.kataGoEngine = null
-        handler.postDelayed({ finishAffinity() }, 150)
+        finish()
     }
     private fun requestUndo(player: Int) {
         if (!game.isActive || game.isGameOver) { showMsg("\u65E0\u6CD5\u6094\u68CB"); return }
@@ -858,7 +903,7 @@ class MainActivity : AppCompatActivity() {
         aiThinking = true
         // V6.9: 思考期间禁止落子
         goView.autoPlayBlock = true
-        gamePresentation?.go?.autoPlayBlock = true
+        gamePresentation?.goView?.autoPlayBlock = true
         val thinkingMsg = "🤖 AI 思考中..."
         if (player == myPlayer) { goView.message = thinkingMsg; goView.invalidate() }
         else gamePresentation?.showMessage(thinkingMsg)
@@ -871,7 +916,7 @@ class MainActivity : AppCompatActivity() {
                     kg.stopSearch()
                     // V6.9: 恢复落子
                     goView.autoPlayBlock = false
-                    gamePresentation?.go?.autoPlayBlock = false
+                    gamePresentation?.goView?.autoPlayBlock = false
                     if (player == myPlayer) { goView.clearMessage(); goView.clearAnalysis() }
                     else { gamePresentation?.clearMessage(); gamePresentation?.clearAnalysis() }
                     if (items.isEmpty()) {
@@ -903,7 +948,7 @@ class MainActivity : AppCompatActivity() {
                     aiThinking = false
                     kg.stopSearch()
                     goView.autoPlayBlock = false
-                    gamePresentation?.go?.autoPlayBlock = false
+                    gamePresentation?.goView?.autoPlayBlock = false
                     showMsgToPlayer(player, "🤖 分析中断，请重试")
                 }
             }
@@ -1251,7 +1296,10 @@ class MainActivity : AppCompatActivity() {
                     val newSize = diffSizes[i]
                     game.setBoardSize(newSize)
                     prefs.edit().putInt("board_size", newSize).apply()
-                    goView.invalidate(); gamePresentation?.refreshView()
+                    // V10.0: 重建副屏Activity确保棋盘格同步
+                    goView.invalidate(); launchWhiteScreen()
+                    // V10.1: 棋盘切换时重置副屏让子UI
+                    gamePresentation?.resetHandicapForBoardChange()
                     updateStatusDisplay(); updateCapturesDisplay()
                     // ★ V5.5: 异步预加载 KataGo 模型
                     if (kg != null && kg.isReady && kg.currentBoardSize != newSize) {
@@ -1538,7 +1586,7 @@ class MainActivity : AppCompatActivity() {
 
         // 阻止触摸操作
         goView.replayMode = true
-        gamePresentation?.go?.replayMode = true
+        gamePresentation?.goView?.replayMode = true
 
         // 禁用所有按钮
         disableButtonsForReplay()
@@ -1567,7 +1615,7 @@ class MainActivity : AppCompatActivity() {
 
         // 恢复触摸
         goView.replayMode = false
-        gamePresentation?.go?.replayMode = false
+        gamePresentation?.goView?.replayMode = false
 
         // 移除回放控制栏
         removeReplayControls()
@@ -1803,12 +1851,16 @@ class MainActivity : AppCompatActivity() {
         gamePresentation?.enableButtonsAfterReplay()
     }
 
-    // V8.5: 返回键需对方确认后才能退出
+    // V10.0: 双Activity架构 — Home键直接退出（双屏应用不适合后台）
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        finishAffinity()
+    }
+    // V10.1: 返回键 — 对局中需对方同意才能退出
     override fun onBackPressed() {
-        if (isReplaying) { stopReplay(); return }  // V8.6: 回放期间返回=停止回放
+        if (isReplaying) { stopReplay(); return }
         requestExit()
     }
-    override fun onUserLeaveHint() { super.onUserLeaveHint(); finishAffinity() }
     override fun onRestart() { super.onRestart(); if (gamePresentation == null) launchWhiteScreen() }
     // V6.5: 后台暂停 KataGo 搜索释放GPU
     override fun onPause() {
@@ -1827,8 +1879,9 @@ class MainActivity : AppCompatActivity() {
         if (::goView.isInitialized) { stopRemindTimers(); animator?.cancel() }
         SoundFX.release()
         BgMusic.stop()
+        // V10.0: 双Activity架构 — finish副屏Activity
         try { gamePresentation?.finish() } catch (_: Exception) {}
-        gamePresentation = null; GamePresentation.instance = null
+        gamePresentation = null
         GameState.kataGoEngine?.shutdown()
         GameState.kataGoEngine = null
         super.onDestroy()

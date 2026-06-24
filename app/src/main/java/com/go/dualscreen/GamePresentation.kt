@@ -1,12 +1,12 @@
 package com.go.dualscreen
 
-import android.app.Activity
-import android.content.Context
+import android.app.ActivityOptions
 import android.content.Intent
+import android.os.Bundle
 import android.content.res.Configuration
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
-import android.os.Bundle
+import android.view.Display
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -18,8 +18,9 @@ import android.widget.LinearLayout
 import android.widget.SeekBar
 import android.widget.Switch
 import android.widget.TextView
+import androidx.appcompat.app.AppCompatActivity
 
-class GamePresentation : Activity() {
+class GamePresentation : AppCompatActivity() {
 
     companion object {
         var instance: GamePresentation? = null
@@ -30,8 +31,8 @@ class GamePresentation : Activity() {
     private val playerPerspective: Int get() = sharedPerspective
     private val game: GoGame get() = sharedGame
 
-    private var goView: GoView? = null
-    internal val go: GoView? get() = goView
+    internal var goView: GoView? = null
+    
     private var statusText: TextView? = null
     private var capturesText: TextView? = null
     private var countdownText: TextView? = null
@@ -52,18 +53,19 @@ class GamePresentation : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         instance = this
-        requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        android.util.Log.i("GoGame", "GamePres onCreate: boardSize=${game.boardSize} active=${game.isActive}")
+        val prefs = getSharedPreferences("go_settings", MODE_PRIVATE)
 
         val root = LinearLayout(this).apply {
             orientation = if (isLandscape()) LinearLayout.HORIZONTAL else LinearLayout.VERTICAL
             setBackgroundColor(Color.parseColor("#D4C4A8"))
         }
         goView = GoView(this).apply {
-            this.playerPerspective = this@GamePresentation.playerPerspective
-            this.game = this@GamePresentation.game
-            this.showPieceOrder = getSharedPreferences("go_settings", Context.MODE_PRIVATE).getBoolean("piece_order", false)
-            onConfirmPlace = { row, col -> this@GamePresentation.onPiecePlaced?.invoke(row, col) }
+            this.playerPerspective = playerPerspective
+            this.game = this@GamePresentation.game  // ★ 必须限定外部类的 game，否则 Kotlin 解析为 GoView.game (null!)
+            this.showPieceOrder = prefs.getBoolean("piece_order", false)
+            onConfirmPlace = { row, col -> onPiecePlaced?.invoke(row, col) }
         }
 
         val smallSize = (resources.displayMetrics.density * 60).toInt()
@@ -234,7 +236,7 @@ class GamePresentation : Activity() {
         replaySensitiveViews.addAll(listOf(hurryBtn, passBtn, hintBtn, pauseBtn, autoSwGP, handiSw, handiSeek))
 
         val verLabel = TextView(this).apply {
-            text = "KataGo围棋双屏\nV9.6"; textSize = 9f
+            text = "KataGo围棋双屏\nV10.1"; textSize = 9f
             setTextColor(Color.parseColor("#998B7388")); gravity = Gravity.CENTER
             setPadding(2, 8, 2, 2)
         }
@@ -378,8 +380,11 @@ class GamePresentation : Activity() {
     }
     fun startEggAnimation() = goView?.startEggAnimation()
     fun refreshView() {
+        android.util.Log.i("GoGame", "White refreshView: goView.game?.boardSize=${goView?.game?.boardSize} sharedGame.boardSize=${sharedGame.boardSize}")
         goView?.invalidate()
-        // V9.6: 棋盘切换时关闭让子开关
+    }
+    // V10.1: 棋盘大小切换时重置让子UI（不再在refreshView中重置）
+    fun resetHandicapForBoardChange() {
         handiSwRef?.isChecked = false
         game.setHandicap(0)
     }
@@ -553,42 +558,37 @@ class GamePresentation : Activity() {
         }
     }
 
-    // V8.5: 返回键需对方确认后才能退出
-    override fun onBackPressed() {
-        if (game.isActive && !game.isGameOver) {
-            getMainActivity?.invoke()?.showExitRequestDialog(game.getPlayerName(playerPerspective)) { a ->
-                if (a) { getMainActivity?.invoke()?.exitApp() }
-                else runOnUiThread { getMainActivity?.invoke()?.showMsgToPlayer(playerPerspective, "\u5BF9\u65B9\u62D2\u7EDD\u9000\u51FA") }
-            }
-        } else {
-            getMainActivity?.invoke()?.finishAffinity()
-            instance = null
-            finishAffinity()
-        }
-    }
-    override fun onUserLeaveHint() {
-        super.onUserLeaveHint()
-        if (game.isActive && !game.isGameOver) {
-            getMainActivity?.invoke()?.showExitRequestDialog(game.getPlayerName(playerPerspective)) { a ->
-                if (a) { getMainActivity?.invoke()?.exitApp() }
-            }
-        } else {
-            getMainActivity?.invoke()?.finishAffinity()
-            instance = null
-            finishAffinity()
-        }
-    }
-
-    override fun onDestroy() {
-        instance = null
-        super.onDestroy()
-    }
-
     // V9.1: 回放时禁用/恢复按钮
     fun disableButtonsForReplay() {
         for (v in replaySensitiveViews) { v.isEnabled = false; v.alpha = 0.4f }
     }
     fun enableButtonsAfterReplay() {
         for (v in replaySensitiveViews) { v.isEnabled = true; v.alpha = 1.0f }
+    }
+
+    // ★ V10.0: Activity 生命周期（双 Activity 架构）
+    // singleInstance + onNewIntent：如果系统复用已有实例，强制刷新UI
+    override fun onNewIntent(intent: Intent?) {
+        super.onNewIntent(intent)
+        android.util.Log.i("GoGame", "GamePres onNewIntent: boardSize=${game.boardSize}")
+        // 刷新棋盘视图（boardSize 可能已通过 sharedGame 更新）
+        goView?.invalidate()
+        refreshView()
+    }
+    // V10.1: 副屏返回键 → 请求黑方同意后一起退出
+    override fun onBackPressed() {
+        getMainActivity?.invoke()?.requestExitFromWhite() ?: super.onBackPressed()
+    }
+    // V10.1: 副屏Home键 → 通知主屏一起退出
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        getMainActivity?.invoke()?.let {
+            it.dismissPresentation()
+            it.finish()
+        }
+    }
+    override fun onDestroy() {
+        super.onDestroy()
+        instance = null
     }
 }

@@ -68,12 +68,18 @@ class GoView @JvmOverloads constructor(
 
     /** 动态获取棋盘大小 */
     private val boardSz get() = game?.boardSize ?: 19
+    private var loggedBoardSz = -1  // 一次日志防刷屏
 
     data class Particle(var x: Float, var y: Float, var vx: Float, var vy: Float,
                         var life: Float, val maxLife: Float, val color: Int, var size: Float)
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
+        val curSz = boardSz
+        if (curSz != loggedBoardSz) {
+            android.util.Log.i("GoGame", "GoView.onDraw: boardSz=$curSz gameRef=${game != null} gameBoardSize=${game?.boardSize}")
+            loggedBoardSz = curSz
+        }
         val w = width.toFloat(); val h = height.toFloat()
 
         // 棋盘最大化，四周留舒适边距

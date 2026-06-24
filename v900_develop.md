@@ -1,7 +1,7 @@
 # 双屏异显开发指南 — V900 芯片平台
 
-> 基于 **GoDualScreen (KataGo围棋双屏 V6.2)** 项目实战经验总结。
-> 芯片: 8核 ARM + Mali-G52 6核 GPU，Android 12 (API 31)，双屏异显。
+> 基于 **GoDualScreen (KataGo围棋双屏 V10.1)** 项目实战经验总结。
+> 芯片: 8核 ARM Cortex-A73 + Mali-G52 6核 GPU，Android 12 (API 31)，双屏异显。
 > 本文档可直接作为同平台其他双屏项目的开发参考。
 
 ---
@@ -18,6 +18,8 @@
 8. [AndroidManifest 配置要点](#8-androidmanifest-配置要点)
 9. [芯片平台注意事项](#9-芯片平台注意事项)
 10. [调试与问题排查](#10-调试与问题排查)
+11. [实战踩坑与解决方案](#11-实战踩坑与解决方案)
+12. [版本演进摘要](#12-版本演进摘要)
 
 ---
 
@@ -25,13 +27,41 @@
 
 ### 1.1 芯片特性
 
+> 以下数据通过 `adb shell getprop` / `adb shell dumpsys display` / `adb shell cat /proc/cpuinfo` 从真机获取。
+
 | 特性 | 规格 |
 |------|------|
-| **SoC** | 8核 ARM (推测 RK3588 或同级) |
-| **GPU** | Mali-G52 6核 (OpenCL 3.0) |
+| **型号** | HL2.0 (huanglong) |
+| **SoC** | 8核 ARM Cortex-A73 (CPU part 0xd09) |
+| **GPU** | Mali-G52 (OpenGL ES 3.2 / OpenCL 3.0) |
+| **CPU 架构** | arm64-v8a |
+| **Android 版本** | 12 (SDK 31) |
 | **显示输出** | 双独立显示控制器 (Display 0 + Display 2) |
-| **Android 版本** | 12 (API 31) |
-| **显示连接** | Display 0 = 主屏 (内建), Display 2 = 副屏 (HDMI/DSI) |
+| **主屏** | 内置屏幕, 1920×1280, 横屏 (Display 0) |
+| **副屏** | 扩展屏幕, 1920×1280, 横屏 (Display 2) |
+| **OpenGL 驱动** | `r35p0-01eac0` |
+
+### 1.2 adb 采集命令
+
+```bash
+# 设备型号 & 制造商
+adb shell getprop ro.product.model        # HL2.0
+adb shell getprop ro.product.manufacturer  # HL2.0
+adb shell getprop ro.hardware              # huanglong
+
+# CPU 信息
+adb shell cat /proc/cpuinfo | grep -E "CPU part|processor"
+# CPU part: 0xd09 → ARM Cortex-A73
+
+# GPU 信息
+adb shell dumpsys SurfaceFlinger | grep "GLES:"
+# GLES: ARM, Mali-G52, OpenGL ES 3.2
+
+# 显示拓扑
+adb shell dumpsys display | grep -E "Display Device|mViewports"
+# Display 0: 内置屏幕, 1920×1280
+# Display 2: 外部屏幕, 1920×1280
+```
 
 ### 1.2 显示拓扑
 
@@ -573,6 +603,234 @@ adb shell content insert --uri content://settings/system \
 | 两个屏幕显示相同 | 未使用 `setLaunchDisplayId` | 检查反射代码 |
 | 主屏跑到副屏 | 防呆机制未触发 | 检查 `onCreate` 极早期检测 |
 | 两个屏 UI 互相干扰 | 共享状态未正确隔离 | 检查 GameState 单例线程安全 |
+
+---
+
+## 11. 实战踩坑与解决方案
+
+> 以下问题均来自 V8.5 → V10.1 开发过程中实际遇到的 bug，按时间顺序排列。
+
+### 11.1 Presentation API 陷阱：副屏退出异常
+
+**现象**：使用 `Presentation` API 时，副屏白方退出会导致 TikTok 等后台 App 音频异常（声音加倍/不暂停）。
+
+**根因**：`Presentation` 不是独立的 Activity，不触发 Android 标准生命周期回调（`onPause`/`onUserLeaveHint`），后台 App 不知道有新的"全屏内容"覆盖。
+
+**解决**：放弃 `Presentation` API，改用**双 Activity 方案**（见第 2 节）。副屏使用 `AppCompatActivity` + `singleInstance` 启动模式。
+
+**教训**：`Presentation` 适用于"第二屏显示辅助信息"场景，不适合"第二屏作为独立交互界面"场景。
+
+---
+
+### 11.2 副屏棋盘大小不跟随设置同步
+
+**现象**：设置中切换棋盘大小（如 13→9），主屏正确刷新，副屏始终显示旧棋盘大小。
+
+**排查过程**：
+```bash
+adb logcat -s GoGame:I | grep boardSize
+# 发现：GamePres onCreate: boardSize=13（正确）
+# 但是：GoView.onDraw: boardSz=19 gameRef=false gameBoardSize=null  ← bug!
+```
+
+**根因**：**Kotlin 作用域解析陷阱**！在 `GamePresentation.onCreate` 中：
+```kotlin
+// ❌ 错误代码
+goView = GoView(this).apply {
+    this.game = game  // ← 两个 game 都解析为 GoView.game (null)！
+}
+```
+`GoView` 自身有 `var game: GoGame? = null` 属性，在 `apply` 块内 Kotlin 将未限定的 `game` 优先解析为接收者属性，导致自赋值 `null = null`。
+
+**解决**：
+```kotlin
+// ✅ 正确代码 — 显式限定外部类
+goView = GoView(this).apply {
+    this.game = this@GamePresentation.game
+}
+```
+
+**教训**：在 `apply`/`with`/`run` 等作用域函数内，如果接收者与外部类有同名属性，必须用 `this@OuterClass` 显式限定。建议在复杂 `apply` 块中使用 `also` 配合 `it` 避免歧义。
+
+---
+
+### 11.3 `singleInstance` + `finish()` + `startActivity()` 竞态
+
+**现象**：切换棋盘大小时副屏偶尔不刷新，或短暂黑屏。
+
+**根因**：`launchWhiteScreen()` 调用 `finish()` 关闭旧 Activity 后**立即** `startActivity()` 创建新 Activity。`finish()` 是异步的，系统可能复用旧实例（触发 `onNewIntent` 而非 `onCreate`），旧 UI 未更新。
+
+**解决**（V10.0）：
+```kotlin
+// ✅ 先检查是否已有活跃实例，有则直接刷新，无则启动新实例
+val existing = gamePresentation
+if (existing != null && !existing.isFinishing && !existing.isDestroyed) {
+    // 复用现有实例，更新 sharedGame + invalidate
+    existing.refreshView()
+    return
+}
+// 没有活跃实例 → 启动新的
+startActivity(intent, options.toBundle())
+```
+
+同时添加 `onNewIntent` 作为安全网：
+```kotlin
+override fun onNewIntent(intent: Intent?) {
+    super.onNewIntent(intent)
+    goView?.invalidate()  // 强制重绘
+}
+```
+
+**教训**：`singleInstance` Activity 不要依赖 `finish()+startActivity` 的"重建"语义；优先原地更新状态。
+
+---
+
+### 11.4 `refreshView()` 误重置让子
+
+**现象**：白方设置让子后点击"开始"，让子被清零，游戏以无让子状态开始。
+
+**流程追踪**：
+1. 白方开启让子开关 → `game.setHandicap(4)` ✅
+2. 白方点"开始" → `game.startGame()` → `onGameStarted()`
+3. `onGameStarted()` 调用 `gamePresentation?.refreshView()`
+4. `refreshView()` 中 `game.setHandicap(0)` ❌ ← 让子被清零！
+
+**根因**：`refreshView()` 承担了双重职责：既刷新视图（正常），又重置让子 UI（仅棋盘切换时需要）。
+
+**解决**（V10.1）：
+```kotlin
+// refreshView() 只做视图刷新
+fun refreshView() {
+    goView?.invalidate()
+}
+
+// 棋盘切换时单独调用
+fun resetHandicapForBoardChange() {
+    handiSwRef?.isChecked = false
+    game.setHandicap(0)
+}
+```
+
+**教训**：方法命名应与实际行为一致。`refreshView` 不应有副作用；UI 状态重置应有独立入口。
+
+---
+
+### 11.5 副屏返回键不联动主屏退出
+
+**现象**（V10.0）：白方（副屏）按返回键，副屏 Activity 关闭，但主屏游戏仍在运行。
+
+**根因**：`GamePresentation` 改为独立 Activity 后，默认 `onBackPressed()` 只 `finish()` 自身，不会通知主屏。
+
+**解决**（V10.1）：
+```kotlin
+// GamePresentation.kt
+override fun onBackPressed() {
+    getMainActivity?.invoke()?.requestExitFromWhite() ?: super.onBackPressed()
+}
+override fun onUserLeaveHint() {
+    super.onUserLeaveHint()
+    getMainActivity?.invoke()?.let {
+        it.dismissPresentation()
+        it.finish()
+    }
+}
+```
+
+`MainActivity` 新增：
+```kotlin
+// 白方请求退出 → 对话框显示在黑方主屏
+internal fun requestExitFromWhite() {
+    if (game.isActive && !game.isGameOver) {
+        showExitRequestDialog(game.getPlayerName(GoGame.PLAYER_WHITE)) { a ->
+            if (a) runOnUiThread { exitApp() }
+            else runOnUiThread { gamePresentation?.showPopupMessage("对方拒绝退出") }
+        }
+    } else { exitApp() }
+}
+```
+
+**教训**：双 Activity 架构下，每个 Activity 的返回键和 Home 键都需要显式处理，通知对方 Activity 同步退出。
+
+---
+
+### 11.6 退出确认对话框方向
+
+**现象**：对局中按返回，需对方同意才能退出。黑方退出 → 对话框应弹在白方；白方退出 → 对话框应弹在黑方。
+
+**解决**（V10.1）：
+| 退出方 | 调用方法 | 对话框显示位置 |
+|--------|---------|:----------:|
+| 黑方（主屏返回键） | `requestExit()` | 白方副屏 |
+| 白方（副屏返回键） | `requestExitFromWhite()` | 黑方主屏 |
+| 退出按钮（黑方） | `requestExit()` | 白方副屏 |
+
+```kotlin
+// 黑方请求退出 → 问白方
+private fun requestExit() {
+    if (game.isActive && !game.isGameOver) {
+        gamePresentation?.showExitRequestDialog(game.getPlayerName(myPlayer)) { a ->
+            if (a) exitApp() else showMsg("对方拒绝退出")
+        }
+    } else { exitApp() }
+}
+
+// 白方请求退出 → 问黑方
+internal fun requestExitFromWhite() {
+    if (game.isActive && !game.isGameOver) {
+        showExitRequestDialog(game.getPlayerName(GoGame.PLAYER_WHITE)) { a ->
+            if (a) exitApp() else gamePresentation?.showPopupMessage("对方拒绝退出")
+        }
+    } else { exitApp() }
+}
+```
+
+---
+
+### 11.7 logcat 诊断三板斧
+
+双屏问题调试时，关键日志标签：
+
+```bash
+# 过滤 GoGame 相关日志
+adb logcat -s GoGame:I
+
+# 按进程 PID 过滤（避免其他 App 噪音）
+pid=$(adb shell ps -A | grep dualscreen | awk '{print $2}')
+adb logcat --pid=$pid -v time
+
+# 关键检查点
+grep "GamePres onCreate"      # 副屏启动时的 boardSize
+grep "GoView.onDraw"          # 实际绘制的 boardSz + gameRef 是否 null
+grep "launchWhiteScreen"      # 主屏启动副屏的决策（复用/新建）
+grep "White refreshView"      # 副屏刷新时 goView.game 引用状态
+```
+
+**典型 bug 日志示例**：
+```
+# ❌ 副屏 GoView.game 为 null → 默认 19×19
+GoView.onDraw: boardSz=19 gameRef=false gameBoardSize=null
+
+# ✅ 修复后正常
+GoView.onDraw: boardSz=13 gameRef=true gameBoardSize=13
+```
+
+---
+
+## 12. 版本演进摘要
+
+| 版本 | 关键变更 | 解决的问题 |
+|------|---------|-----------|
+| V8.5 | 初始围棋版本（19×19） | 五子棋 → 围棋迁移 |
+| V8.6 | 录像保存/回放 | 对局复盘 |
+| V9.3 | 让子系统、AI 超时 30s | 让子对局稳定性 |
+| V9.6 | 悔棋标记（isUndo） | 录像中保留悔棋历史 |
+| V9.8 | **Presentation API 尝试** | TikTok 音频干扰（未解决） |
+| V10.0 | **双 Activity 架构回归** | 副屏生命周期独立、TikTok 问题根除 |
+| V10.0 | 修复 Kotlin 作用域 bug | 副屏棋盘大小同步 |
+| V10.0 | 修复 singleInstance 竞态 | 副屏切换棋盘不再黑屏 |
+| V10.1 | 修复 refreshView 让子重置 | 白方让子可正常开始 |
+| V10.1 | 副屏返回键联动退出 | 白方按返回主屏同步退出 |
+| V10.1 | 退出确认双向对话框 | 对局中退出需对方同意 |
 
 ---
 

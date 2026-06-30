@@ -11,13 +11,13 @@ android {
         applicationId = "com.go.dualscreen"
         minSdk = 31
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "10.2"
     }
 
     signingConfigs {
         create("release") {
-            storeFile = file("D:\\qianming\\debug.keystore")
+            storeFile = file(System.getProperty("user.home") + "/debug.keystore")
             storePassword = "880203"
             keyAlias = "androiddebugkey"
             keyPassword = "880203"

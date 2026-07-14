@@ -66,6 +66,8 @@ class GoGame(boardSize: Int = 19) {
         private set
 
     private val moveHistory = mutableListOf<MoveRecord>()
+    /** V10.3: 暴露着法历史供诊断用 */
+    val debugMoveHistory: List<MoveRecord> get() = moveHistory.toList()
 
     private var koRestrictedRow = -1
     private var koRestrictedCol = -1
@@ -600,44 +602,91 @@ class GoGame(boardSize: Int = 19) {
             while (kg.boardLoading && waited < 15000) {
                 Thread.sleep(100); waited += 100
             }
-            // V9.3: 确保让子已同步到 KataGo 再 genmove（解决时序竞态）
-            if (handicapStones >= 2) {
-                try {
-                    kg.setBoardSize(boardSize)
-                    kg.clearBoard()
-                    kg.setKomi(KOMI.toFloat())
-                    for (r in 0 until boardSize) for (c in 0 until boardSize) {
-                        if (board[r][c] != EMPTY) {
-                            val clr = if (board[r][c] == PLAYER_BLACK) "b" else "w"
-                            kg.playMove(clr, r, c)
+            // V10.2: 让子对局 genmove 前确保首次同步完成
+            if (handicapStones >= 2 && !GameState.initialSyncDone) {
+                // 等待 asyncSyncKataGoBoard 完成（最多 5s，通常 <1s）
+                var syncWait = 0
+                while (!GameState.initialSyncDone && syncWait < 5000) {
+                    Thread.sleep(50); syncWait += 50
+                }
+                // 超时或同步标志仍未设置 → 手动同步兜底
+                if (!GameState.initialSyncDone) {
+                    try {
+                        kg.clearBoard()
+                        kg.setKomi(KOMI.toFloat())
+                        var cnt = 0
+                        for (r in 0 until boardSize) for (c in 0 until boardSize) {
+                            if (board[r][c] != EMPTY) {
+                                val clr = if (board[r][c] == PLAYER_BLACK) "b" else "w"
+                                kg.playMove(clr, r, c); cnt++
+                            }
                         }
+                        GameState.initialSyncDone = true
+                        android.util.Log.i("GoGame", "Pre-genmove fallback sync: $cnt stones")
+                    } catch (e: Exception) {
+                        android.util.Log.e("GoGame", "Pre-genmove sync failed: ${e.message}")
                     }
-                } catch (e: Exception) {
-                    android.util.Log.e("GoGame", "Pre-genmove sync failed: ${e.message}")
                 }
             }
             val color = if (player == PLAYER_BLACK) "b" else "w"
             val startMs = System.currentTimeMillis()
-            val result = kg.genMove(color)
-            if (result != null) {
-                val (row, col, detail) = result
-                // V9.3: 若被让子占位则重试一次（genMove后棋盘已同步）
-                if (row in 0 until boardSize && col in 0 until boardSize && board[row][col] == EMPTY) {
-                    val usedMs = System.currentTimeMillis() - startMs
-                    val opp = if (player==PLAYER_BLACK) PLAYER_WHITE else PLAYER_BLACK
-                    val myT=terrCntFast(player); val oppT=terrCntFast(opp)
-                    val myC=if(player==PLAYER_BLACK)capturedByBlack else capturedByWhite
-                    val oppC=if(player==PLAYER_BLACK)capturedByWhite else capturedByBlack
-                    val lead=(myT+myC)-(oppT+oppC+KOMI)
-                    val emoji=when{lead>8->"▲";lead>2->"●";lead>-2->"·";lead>-8->"○";else->"△"}
-                    val szLabel=when(boardSize){9->"9路";13->"13路";else->""}
-                    val infoStr = "🤖 KataGo ${usedMs}ms $szLabel | $emoji${"%.0f".format(Math.abs(lead))}目"
-                    val fullStr = if (detail.isNotEmpty()) "$infoStr\n$detail" else infoStr
-                    return Triple(row, col, fullStr)
+            // V10.3: 全路径诊断日志 — 每一步都记录
+            android.util.Log.i("GoGame", "suggestMove: start player=$player handicap=$handicapStones boardSize=$boardSize")
+            var retries = 0
+            while (retries < 3) {
+                android.util.Log.i("GoGame", "suggestMove: genMove attempt ${retries+1}/3...")
+                val result = kg.genMove(color)
+                if (result != null) {
+                    val (row, col, detail) = result
+                    android.util.Log.i("GoGame", "suggestMove: genMove returned ($row,$col) board[$row][$col]=${board[row][col]} isEmpty=${board[row][col]==EMPTY}")
+                    if (row in 0 until boardSize && col in 0 until boardSize && board[row][col] == EMPTY) {
+                        // V10.2: 快速自杀检测 — 模拟落子看是否禁入点
+                        board[row][col] = player
+                        val opp = if (player == PLAYER_BLACK) PLAYER_WHITE else PLAYER_BLACK
+                        var capturesAny = false
+                        for ((nr, nc) in getNeighbors(row, col)) {
+                            if (board[nr][nc] == opp && countLiberties(getGroup(nr, nc)) == 0) {
+                                capturesAny = true; break
+                            }
+                        }
+                        val myLibs = countLiberties(getGroup(row, col))
+                        val isSuicide = !capturesAny && myLibs == 0
+                        board[row][col] = EMPTY  // 恢复
+                        android.util.Log.i("GoGame", "suggestMove: suicide check capturesAny=$capturesAny myLibs=$myLibs isSuicide=$isSuicide")
+                        if (isSuicide) {
+                            android.util.Log.w("GoGame", "genmove suicide detected at ($row,$col), retry ${retries+1}/3 — calling undo...")
+                            kg.undoMove()
+                            android.util.Log.i("GoGame", "undoMove done, retrying genmove...")
+                            retries++
+                            continue
+                        }
+                        val usedMs = System.currentTimeMillis() - startMs
+                        val myT=terrCntFast(player); val oppT=terrCntFast(opp)
+                        val myC=if(player==PLAYER_BLACK)capturedByBlack else capturedByWhite
+                        val oppC=if(player==PLAYER_BLACK)capturedByWhite else capturedByBlack
+                        val lead=(myT+myC)-(oppT+oppC+KOMI)
+                        val emoji=when{lead>8->"▲";lead>2->"●";lead>-2->"·";lead>-8->"○";else->"△"}
+                        val szLabel=when(boardSize){9->"9路";13->"13路";else->""}
+                        val infoStr = "🤖 KataGo ${usedMs}ms $szLabel | $emoji${"%.0f".format(Math.abs(lead))}目"
+                        val fullStr = if (detail.isNotEmpty()) "$infoStr\n$detail" else infoStr
+                        android.util.Log.i("GoGame", "suggestMove: SUCCESS returning ($row,$col)")
+                        return Triple(row, col, fullStr)
+                    } else {
+                        // 位置被占 → 重试
+                        android.util.Log.w("GoGame", "genmove OCCUPIED ($row,$col) board[$row][$col]=${board[row][col]}, retry ${retries+1}/3 — calling undo...")
+                        kg.undoMove()
+                        android.util.Log.i("GoGame", "undoMove done after occupied")
+                        retries++
+                        continue
+                    }
+                } else {
+                    android.util.Log.w("GoGame", "suggestMove: genMove returned NULL (pass/resign), breaking out")
                 }
+                break  // genMove 返回 null → 不再重试
             }
+            android.util.Log.w("GoGame", "suggestMove: exhausted retries or null, returning null")
         }
-        return null  // V6.5: KataGo 不可用时返回 null，不再回退旧算法
+        return null
     }
 
     /** V5.2: 导出 GoGame 棋盘字符串（用于与 KataGo showboard 对比） */

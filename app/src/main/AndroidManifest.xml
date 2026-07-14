@@ -28,10 +28,20 @@
             </intent-filter>
         </activity>
 
+        <!-- V10.3: adb 触发保存录像 + dump 状态，用于现场诊断 -->
+        <receiver
+            android:name=".DebugReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.go.dualscreen.DEBUG_DUMP" />
+            </intent-filter>
+        </receiver>
+
         <!-- 副屏 Activity — 双屏异显方案 -->
         <activity
             android:name=".GamePresentation"
             android:exported="false"
+            android:excludeFromRecents="true"
             android:screenOrientation="landscape"
             android:launchMode="singleInstance"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|smallestScreenSize" />

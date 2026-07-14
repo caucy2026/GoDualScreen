@@ -579,13 +579,17 @@ class GamePresentation : AppCompatActivity() {
     override fun onBackPressed() {
         getMainActivity?.invoke()?.requestExitFromWhite() ?: super.onBackPressed()
     }
-    // V10.1: 副屏Home键 → 通知主屏一起退出
+    // V10.3: 副屏Home键 → 对局中不杀主屏，仅dismiss自己
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
-        getMainActivity?.invoke()?.let {
-            it.dismissPresentation()
-            it.finish()
+        val main = getMainActivity?.invoke() ?: return
+        val g = sharedGame
+        if (!g.isActive || g.isGameOver) {
+            // 对局未开始或已结束 → 直接退出
+            main.dismissPresentation()
+            main.finish()
         }
+        // 对局进行中 → 不杀主屏，让主屏的 onUserLeaveHint 自己处理
     }
     override fun onDestroy() {
         super.onDestroy()

@@ -79,6 +79,29 @@ class KataGoEngine(private val context: Context) {
                 }
                 Log.i("KataGo", "Model ready: ${modelFile.length()} bytes")
 
+                // V10.3: 复制预生成 GPU 调优文件，跳过首次调优等待
+                val tuneDir = File(engineDir, "opencltuning")
+                if (!tuneDir.exists() || tuneDir.listFiles()?.isEmpty() != false) {
+                    try {
+                        val assetsTune = context.assets.list("katago/opencltuning")
+                        if (assetsTune != null && assetsTune.isNotEmpty()) {
+                            tuneDir.mkdirs()
+                            onProgress("⚡ 加载预优化参数...")
+                            for (name in assetsTune) {
+                                val f = File(tuneDir, name)
+                                if (!f.exists()) {
+                                    context.assets.open("katago/opencltuning/$name").use { input ->
+                                        FileOutputStream(f).use { out -> input.copyTo(out) }
+                                    }
+                                }
+                            }
+                            Log.i("KataGo", "Tuning files preloaded: ${assetsTune.size} files")
+                        }
+                    } catch (e: Exception) {
+                        Log.w("KataGo", "Tuning preload skipped: ${e.message}")
+                    }
+                }
+
                 // ★ V5: 复制设备真实 OpenCL GPU 驱动到引擎目录（绕过 Android linker namespace 限制）
                 onProgress("🎮 复制 GPU 驱动...")
                 val realOpenCL = File("/vendor/lib64/libOpenCL.so")
@@ -278,6 +301,8 @@ class KataGoEngine(private val context: Context) {
         return true
     }
     fun setKomi(komi: Float) { gtp("komi $komi") }
+    /** V10.2: 撤回KataGo内部最后一步（genmove后棋盘不同步时使用） */
+    fun undoMove() { gtp("undo", 5000) }
 
     /** V6.3: kata-analyze 分析结果 */
     data class AnalysisItem(

@@ -103,13 +103,13 @@ class MainActivity : AppCompatActivity() {
         SoundFX.voiceStyle = prefs.getInt("voice_style", 0)
         // V6.0: 恢复背景音乐状态（默认开启50%）
         BgMusic.updateVolume(prefs.getFloat("music_volume", 0.5f))
-        if (prefs.getBoolean("bg_music", true)) {
+        if (prefs.getBoolean("bg_music", false)) {
             BgMusic.setEnabled(this, true)
         }
         // V6.1: KataGo开关状态（默认开启）
         kataGoEnabled = prefs.getBoolean("katago_enabled", true)
         // V8.6: 录像开关状态
-        recordingEnabled = prefs.getBoolean("recording_enabled", false)
+        recordingEnabled = prefs.getBoolean("recording_enabled", true)  // V10.3: 默认开启诊断录像
         initMainUI()
         goView.showPieceOrder = prefs.getBoolean("piece_order", false)
         launchWhiteScreen()
@@ -517,7 +517,9 @@ class MainActivity : AppCompatActivity() {
         for (display in displayManager.displays) {
             if (display.displayId != myDisplayId && display.isValid) {
                 android.util.Log.i("GoGame", "launchWhiteScreen: starting new Activity on display=${display.displayId}, boardSize=${game.boardSize}")
-                val intent = Intent(this, GamePresentation::class.java)
+                val intent = Intent(this, GamePresentation::class.java).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
                 if (android.os.Build.VERSION.SDK_INT >= 26) {
                     try {
                         val options = android.app.ActivityOptions.makeBasic()
@@ -593,6 +595,7 @@ class MainActivity : AppCompatActivity() {
     private fun resetKataGoBoard() {
         val kg = GameState.kataGoEngine ?: return
         if (!kg.isReady) return
+        GameState.initialSyncDone = false  // V10.2: 新对局重置同步标志
         try {
             kg.clearBoard()
             kg.setKomi(GoGame.KOMI.toFloat())
@@ -621,6 +624,12 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
                 Log.i("KataGo", "Board synced async: $count moves")
+                GameState.initialSyncDone = true  // V10.2: 标记同步完成
+                // V10.2: 同步后对比双方棋盘，诊断让子不同步问题
+                val kgBoard = kg.showboard()
+                val ggBoard = game.dumpBoard()
+                Log.i("KataGo", "=== KataGo showboard after sync ===\n$kgBoard")
+                Log.i("KataGo", "=== GoGame dumpBoard after sync ===\n$ggBoard")
             } catch (e: Exception) {
                 Log.e("KataGo", "Board sync failed: ${e.message}")
             }
@@ -964,6 +973,9 @@ class MainActivity : AppCompatActivity() {
     private var aiThinking = false
     private var aiTimeoutRunnable: Runnable? = null
     private var aiComputeDone = false  // V8.5: 防止超时/线程双重回调
+    private var aiSpinnerRunnable: Runnable? = null  // V10.2: 思考动画
+    private val spinnerFrames = arrayOf("\u25D0", "\u25D3", "\u25D1", "\u25D2")  // ◐◓◑◒
+    private var spinnerIdx = 0
     private fun computeAiAsync(player: Int, onDone: (Triple<Int,Int,String>?) -> Unit) {
         if (isReplaying) return  // V8.6: 回放期间禁止 AI
         if (aiThinking) return
@@ -983,14 +995,28 @@ class MainActivity : AppCompatActivity() {
             onDone(null)
             return
         }
-        aiThinking = true; aiComputeDone = false
-        val msg = "\uD83E\uDD16 KataGo \u6DF1\u5EA6\u601D\u8003\u4E2D..."
-        if (player == myPlayer) { goView.message = msg; goView.invalidate() }
-        else gamePresentation?.showMessage(msg)
-        // ★ V4.4: 10 秒超时保护，防止死锁
+        aiThinking = true; aiComputeDone = false; spinnerIdx = 0
+        // V10.2: 先清理上一次的 timeout/spinner，防止旧回调吞掉新结果
+        aiTimeoutRunnable?.let { handler.removeCallbacks(it) }
+        aiSpinnerRunnable?.let { handler.removeCallbacks(it) }
+        val baseMsg = "\uD83E\uDD16 KataGo \u6DF1\u5EA6\u601D\u8003\u4E2D"
+        // V10.2: 旋转动画 — 50ms/帧 = 20fps 丝滑
+        aiSpinnerRunnable = object : Runnable {
+            override fun run() {
+                if (aiComputeDone) return
+                spinnerIdx = (spinnerIdx + 1) % spinnerFrames.size
+                val animMsg = "$baseMsg ${spinnerFrames[spinnerIdx]}"
+                if (player == myPlayer) { goView.message = animMsg; goView.invalidate() }
+                else gamePresentation?.showMessage(animMsg)
+                handler.postDelayed(this, 50)
+            }
+        }
+        handler.post(aiSpinnerRunnable!!)  // V10.2: 50ms一帧 = 20fps 丝滑旋转
+        // ★ V4.4: 30 秒超时保护，防止死锁
         aiTimeoutRunnable = Runnable {
             if (aiComputeDone) return@Runnable
             aiComputeDone = true; aiThinking = false
+            aiSpinnerRunnable?.let { handler.removeCallbacks(it) }
             Log.w("KataGo", "AI thinking timeout! Resetting aiThinking flag")
             handler.post {
                 if (player == myPlayer) { goView.message = "⚠️ AI 超时，请重试"; goView.invalidate() }
@@ -998,12 +1024,13 @@ class MainActivity : AppCompatActivity() {
                 onDone(null)
             }
         }
-        handler.postDelayed(aiTimeoutRunnable!!, 30000)  // V9.3: 30s（boardsize 加载可能10s+genmove3s）
+        handler.postDelayed(aiTimeoutRunnable!!, 30000)  // V9.3: 30s
         Thread {
             val result = try { game.suggestMove(player) } catch (_: Exception) { null }
             handler.post {
                 if (aiComputeDone) return@post
                 aiComputeDone = true
+                aiSpinnerRunnable?.let { handler.removeCallbacks(it) }
                 aiTimeoutRunnable?.let { handler.removeCallbacks(it) }
                 aiTimeoutRunnable = null
                 aiThinking = false
@@ -1107,25 +1134,26 @@ class MainActivity : AppCompatActivity() {
         val myTurn = cur == myPlayer
         val isAutoPlay = if (myTurn) autoPlayEnabled else autoPlayWhite
         if (isAutoPlay) {
-            // 自动落子模式：3秒延迟后自动落子
-            countdownText.text = "\uD83E\uDD16 3s..."
+            // V10.2: 自动落子 — 1s准备 + 旋转动画
+            countdownText.text = "\uD83E\uDD16 ◐"
             autoPlayRunnable = object : Runnable {
-                var sec = 3
+                var tick = 0
                 override fun run() {
                     if (!game.isActive || game.isGameOver || game.isPaused) { autoPlayRunnable = null; return }
                     if (game.currentPlayer != cur) { startRemindTimers(); return }
-                    sec--
-                    if (sec <= 0) {
+                    tick++
+                    if (tick >= 20) {  // 20 ticks × 50ms = 1s 准备
                         countdownText.text = ""
                         autoPlayRunnable = null
                         executeAutoPlay(cur)
                         return
                     }
-                    countdownText.text = "\uD83E\uDD16 ${sec}s..."
-                    handler.postDelayed(this, 1000)
+                    val frame = spinnerFrames[tick % spinnerFrames.size]
+                    countdownText.text = "\uD83E\uDD16 $frame"
+                    handler.postDelayed(this, 50)
                 }
             }
-            handler.postDelayed(autoPlayRunnable!!, 1000)
+            handler.postDelayed(autoPlayRunnable!!, 50)
             return
         }
         secondsLeft = 60
@@ -1625,6 +1653,7 @@ class MainActivity : AppCompatActivity() {
 
         // V8.7: 恢复棋盘到程序刚启动状态
         game.restart()
+        GameState.initialSyncDone = false  // V10.2: 回放结束重置同步标志
         // V9.3: 回放结束后恢复原始棋盘大小并重新对齐KataGo
         if (replayOrigBoardSize != game.boardSize) {
             game.setBoardSize(replayOrigBoardSize)

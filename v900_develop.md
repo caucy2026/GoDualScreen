@@ -831,6 +831,14 @@ GoView.onDraw: boardSz=13 gameRef=true gameBoardSize=13
 | V10.1 | 修复 refreshView 让子重置 | 白方让子可正常开始 |
 | V10.1 | 副屏返回键联动退出 | 白方按返回主屏同步退出 |
 | V10.1 | 退出确认双向对话框 | 对局中退出需对方同意 |
+| V10.2 | AI 自杀落子重试 (undo+retry×3) | AI 卡死在 suicide 位置 |
+| V10.2 | 思考旋转动画 20fps + 自动落子 1s 准备 | AI 思考时 UI 无反馈 |
+| V10.2 | 让子对局 genmove 前首次同步 | 让子时 AI 棋盘状态不一致 |
+| V10.3 | 副屏 Home 键防杀对局 (onUserLeaveHint) | 按副屏 Home 对局中断 |
+| V10.3 | 隐藏最近任务 (excludeFromRecents+NEW_TASK) | 双屏任务出现在 Recent |
+| V10.3 | DebugReceiver ADB 诊断广播 | 现场排查需重启 App |
+| V10.3 | GPU 调优文件预加载 (15 个 assets) | 首次启动调优等待 20-40s |
+| V10.3 | suggestMove 全路径诊断日志 | AI 落子问题难定位 |
 
 ---
 

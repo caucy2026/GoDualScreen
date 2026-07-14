@@ -1,4 +1,126 @@
-# GomokuDualScreen 版本更新日志 (Changelog)
+# GoDualScreen & Go3DGlobe — 版本更新日志 (Changelog)
+
+> 围棋/地球双应用完整迭代记录
+
+---
+
+# GoDualScreen 版本更新日志
+
+> 双屏围棋 Android 应用，KataGo AI 引擎，从 GomokuDualScreen V4.4 改造而来。
+
+---
+
+## V10.0 — 双 Activity 架构 (2026-07)
+
+### 架构变更
+- 弃用 `Presentation` API，改为独立 `GamePresentation` Activity
+- 通过反射 `setLaunchDisplayId` 启动副屏到 Display 2
+- `GamePresentation` 使用 `singleInstance` 启动模式
+
+### 核心改动
+- `launchWhiteScreen()`: 先检测已有 Activity 是否存活 → 复用刷新或反射创建新实例
+- 延迟 600ms 绑定回调（`onPiecePlaced`、`onPassRequest`、`onStartOrRestart`、`onUndoRequest`）
+- `GameState` 单例：`initialSyncDone` volatile 标记
+
+### Bug 修复
+- **Kotlin 作用域 bug**: `GoView.apply { this.game = game }` 两边都解析为 `GoView.game`（null），改为 `this@GamePresentation.game`
+- **singleInstance 竞态**: `finish()+startActivity` 导致 `onNewIntent` 而非 `onCreate`，改为复用已有 Activity
+
+---
+
+## V10.1 — 让子重置 + 退出确认 (2026-07)
+
+### 修复
+- `resetHandicapForBoardChange()`: 棋盘大小切换时独立重置让子 UI，不再在 `refreshView` 中重置
+- 副屏返回键: `GamePresentation.onBackPressed` → `MainActivity.requestExitFromWhite()`，弹出确认对话框
+
+---
+
+## V10.2 — AI 自杀重试 + 思考动画 (2026-07)
+
+### AI 自杀落子重试
+- `GoGame.suggestMove()`: genmove 返回后检测自杀点（无气且无提子），调用 `undoMove()` + 重新 `genmove`，最多重试 3 次
+- `KataGoEngine.undoMove()`: 新增公开方法，发送 GTP `undo` 命令
+- 让子对局 genmove 前首次同步: 让子 ≥2 时若 `initialSyncDone == false`，全量 replay 棋盘状态到 KataGo
+
+### UI 优化
+- 思考中旋转动画: `computeAiAsync` 和自动落子倒计时使用 `◐◓◑◒` 四帧旋转，50ms/帧 = 20fps
+- 自动落子: 1s 准备时间 + 旋转动画
+
+---
+
+## V10.3 — 诊断工具 + 防杀对局 + GPU 预调优 + 隐藏最近任务 (2026-07)
+
+### 副屏 Home 键防杀对局
+- `GamePresentation.onUserLeaveHint`: 对局进行中不杀主屏，仅 dismiss 自己；只有对局未开始/已结束才退出
+
+### 隐藏最近任务列表
+- `AndroidManifest`: `GamePresentation` 添加 `android:excludeFromRecents="true"`
+- `MainActivity.launchWhiteScreen`: `Intent` 添加 `FLAG_ACTIVITY_NEW_TASK`
+
+### DebugReceiver — ADB 诊断广播
+- 用法: `adb shell am broadcast -n com.go.dualscreen/.DebugReceiver -a com.go.dualscreen.DEBUG_DUMP`
+- 保存: 棋盘状态、KataGo 内部棋盘、录像、落子历史
+
+### KataGo GPU 调优预加载
+- 启动时从 `assets/katago/opencltuning/` 复制 15 个预生成调优文件（Mali-G52 / b18 c384），跳过首次 20-40s 调优
+
+### 诊断日志
+- `suggestMove` 全路径日志: start → genmove → 返回值 → 自杀检测 → 耗时
+- `GoView` 防刷屏日志: `loggedBoardSz` 变量，只在棋盘大小变化时输出一次
+
+### AI 模型实验 (失败)
+- b20 模型: 引擎卡死，GPU 无法承载
+- b28 模型: 291MB 过大，引擎初始化超时
+- **回退到 b18** (105MB) + 800 visits + 8s maxTime
+
+---
+
+## Go3DGlobe V3.5.1 — 默认配置优化 (2026-07-01)
+
+### 改动
+- 默认瓦片源 → 高德（`"amap"`），启动零 token
+- 默认 FPS 浮层 → ON
+- 背景音乐默认 → OFF
+- 版本号 → v3.5.1
+
+---
+
+## Go3DGlobe V3.5.0 — Token 零消耗架构 (2026-07-01)
+
+### 问题
+每次启动大量消耗天地图 token：探测每 15s + z≤5 瓦片在线请求
+
+### 解决
+- `TiandituSatelliteLayer.createTile()` z≤5 拦截 → `ImageSource.fromFilePath()` 本地 Amap 缓存
+- `AmapSatelliteLayer.createTile()` z≤5 本地 / z>5 透明 bitmap 占位
+- 探测间隔 15s→120s
+- 预置瓦片 1364 张 z1-z5 打包进 APK，首次启动拷贝到内部存储
+
+### 踩坑
+`file://` URL 不支持、`MercatorImageTile` package-private、空 URL 崩溃、NASA 纹理 `fromResource()` 失败
+
+---
+
+## Go3DGlobe V3.4.0 — NASA 多级纹理 + 预置瓦片 (2026-06)
+
+- NASA Blue Marble 4K+8K 本地底图系统
+- 8K 拆分为东西半球防 GPU 限制
+- 预下载高德 z1-z5 瓦片
+- APK 大小 ~50MB→~100MB
+
+---
+
+## Go3DGlobe V3.3.0 — 内存优化 + 功能完善 (2026-06)
+
+- `RenderResourceCache` 768MB→48MB，解决 Mali-G52 OOM
+- `detailControl` 80→30
+- 84 首都标记 + 177 国界 + 大洲大洋山川河流
+- 首都数据政治修正
+
+---
+
+# GomokuDualScreen 版本更新日志
 
 > 双屏五子棋 Android 应用，从 V1.0 到 V4.4 的完整迭代记录（~50 次构建）。
 

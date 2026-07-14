@@ -28,4 +28,33 @@ __pycache__/
 
 # Temp scripts (keep important ones)
 fix_gp.py
+
+# Temp / debug files
+temp_*.txt
+crash_log*.txt
+pid.txt
+savelog_*.txt
+
+# Model files (large binaries)
+*.bin.gz
+
+# HTML test pages (dev only)
+*-test.html
+*-showcase.html
+*-only.html
+*-dynamics.html
+*-plasma.html
+*-flame.html
+test-*.html
+sun-*.html
+
+# Volumetric fire (dev experiment)
+volfire/
+
+# Dev notes (keep in AGENTS.md / cl.md)
+corona-prompt.md
+osb.md
+partical.md
+develop.md
+opencl.md
 gen_*.py
